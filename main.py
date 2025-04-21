@@ -1,4 +1,6 @@
 import uuid
+import random
+
 
 class Rules:
     # === Food System ===
@@ -46,10 +48,18 @@ class Ship:
         self.id = str(uuid.uuid4())[:8]
         self.owner = owner
         self.crew = crew
-        self.status = "idle"  # idle, trading, blockading, etc.
+        self.order = ShipOrder.IDLE  # default each turn
 
     def __repr__(self):
-        return f"Ship({self.id}, crew={self.crew}, status={self.status})"
+        return f"Ship({self.id}, crew={self.crew}, order={self.order})"
+
+class ShipOrder:
+    IDLE = "idle"
+    TRADE = "trade"
+    BLOCKADE = "blockade"
+    ATTACK = "attack"
+    PATROL = "patrol"
+
 
 class Nation:
     def __init__(self, name):
@@ -67,6 +77,44 @@ class Nation:
     def consume_port_food(self):
         self.port_food = max(0, self.port_food - Rules.PORT_FOOD_PER_TURN)
 
+    def buy_crew(self, ship, crew_amount):
+        """
+        Buys crew in multiples of 10. Each 10 crew costs 1 gold.
+        """
+        blocks = crew_amount // 10
+        cost = blocks * Rules.CREW_COST
+        if self.gold >= cost:
+            self.gold -= cost
+            ship.crew += blocks * 10
+            print(f" 🧑‍✈️ {self.name} recruited {blocks * 10} crew for ship {ship.id} (cost {cost} gold)")
+        else:
+            print(f" ⚠️ {self.name} can't afford to buy {crew_amount} crew (needs {cost} gold)")
+
+    def assign_orders(self, assignments):
+        """
+        assignments: dict of {ship_id: (order_type, target_or_tier)}
+        Example: { 'a1b2c3': ('trade', 10), 'd4e5f6': ('blockade', 'Spain') }
+        """
+        for ship in self.ships:
+            if ship.id in assignments:
+                order, target = assignments[ship.id]
+
+                if order == ShipOrder.TRADE:
+                    trade_tier = target  # target is actually trade tier (5, 10, 20)
+                    if trade_tier not in Rules.TRADE_MISSION_COSTS:
+                        print(f" ⚠️ Invalid trade tier: {trade_tier}")
+                        continue
+                    if self.gold < trade_tier:
+                        print(f" ⚠️ {self.name} can't afford to fund trade mission of tier {trade_tier}")
+                        continue
+                    self.gold -= trade_tier
+                    ship.trade_tier = trade_tier
+                    ship.order = (ShipOrder.TRADE, None)
+                    print(f" 💼 {self.name} assigned ship {ship.id} to trade (tier {trade_tier}), paid {trade_tier} gold")
+                else:
+                    ship.order = (order, target)
+
+
     def status_report(self):
         print(f"\n=== {self.name.upper()} ===")
         print(f"Gold: {self.gold}")
@@ -74,6 +122,7 @@ class Nation:
         print(f"Ships: {len(self.ships)}")
         for ship in self.ships:
             print(f"  - {ship}")
+    
 class Upkeep:
     @staticmethod
     def apply(nation):
@@ -127,14 +176,136 @@ class Game:
 
     def advance_turn(self):
         print(f"\n🔄 ADVANCING TO TURN {self.turn}")
+        
+        # Upkeep phase
         for nation in self.nations:
             Upkeep.apply(nation)
+
+        # Elimination check for blockaded nations
+        for nation in self.nations[:]:  # copy to allow removal
+            if nation.blockade_turns >= Rules.MAX_BLOCKADE_TURNS:
+                print(f"\n💀 {nation.name} has been blockaded for {Rules.MAX_BLOCKADE_TURNS} turns and is eliminated!")
+                self.nations.remove(nation)
+
         self.turn += 1
         self.show_economy()
+    def resolve_blockades(self):
+        print("\n⚔️ RESOLVING BLOCKADES...")
+        blockades = {}
+        patrols = {}
 
-# Example usage:
+        # Collect orders
+        for nation in self.nations:
+            for ship in nation.ships:
+                order, target = ship.order if isinstance(ship.order, tuple) else (ship.order, None)
+                if order == ShipOrder.BLOCKADE:
+                    blockades.setdefault(target, []).append(ship)
+                elif order == ShipOrder.PATROL:
+                    patrols.setdefault(nation.name, []).append(ship)
+
+        for target_name, blockading_ships in blockades.items():
+            patrol_force = patrols.get(target_name, [])
+            blockading_crew = sum(ship.crew for ship in blockading_ships)
+            patrol_crew = sum(ship.crew for ship in patrol_force)
+
+            print(f"\n🎯 Blockade Attempt on {target_name}:")
+            print(f" - Blockading crew: {blockading_crew}")
+            print(f" - Patrolling crew: {patrol_crew}")
+
+            target_nation = self.find_nation(target_name)
+            if not target_nation:
+                print(f" ❌ Error: Nation {target_name} not found!")
+                continue
+
+            if patrol_crew >= 3 * blockading_crew:
+                print(" 💥 Patrol force overwhelms the blockade! Blockading ship(s) are sunk.")
+                # Remove blockading ships from their owner's list
+                for ship in blockading_ships:
+                    owner = ship.owner
+                    owner.ships = [s for s in owner.ships if s != ship]
+                    print(f"   - Ship {ship.id} sunk.")
+                target_nation.is_blockaded = False
+                target_nation.blockade_turns = 0  # optional: reset counter
+            elif patrol_crew >= blockading_crew:
+                print(" ✅ Blockade repelled by patrol.")
+                target_nation.is_blockaded = False
+                target_nation.blockade_turns = 0
+            else:
+                print(" ❌ Blockade succeeds.")
+                target_nation.is_blockaded = True
+                target_nation.blockade_turns += 1
+                print(f" - {target_name} has been blockaded for {target_nation.blockade_turns} turn(s)")
+
+
+    def resolve_trades(self):
+        print("\n💰 RESOLVING TRADE MISSIONS...")
+        for nation in self.nations:
+            for ship in nation.ships:
+                order, _ = ship.order if isinstance(ship.order, tuple) else (ship.order, None)
+                if order == ShipOrder.TRADE:
+                    tier = ship.trade_tier
+                    min_return, max_return = Rules.TRADE_RETURN_RANGES[tier]
+                    profit = random.randint(min_return, max_return)
+                    nation.gold += profit
+                    print(f" - {nation.name}'s Ship {ship.id} completed trade mission (Tier {tier}) and earned {profit} gold.")
+
+
+    def find_nation(self, name):
+        for nation in self.nations:
+            if nation.name == name:
+                return nation
+        return None
+    def reveal_orders(self):
+        print("\n📜 REVEALING SEALED ORDERS")
+        for nation in self.nations:
+            print(f"\n{nation.name.upper()}'s SHIPS:")
+            for ship in nation.ships:
+                order, target = ship.order if isinstance(ship.order, tuple) else (ship.order, None)
+                if order == ShipOrder.BLOCKADE or order == ShipOrder.ATTACK:
+                    print(f" - Ship {ship.id} will {order} {target}")
+                else:
+                    print(f" - Ship {ship.id} will {order}")
+
+# Reset game
 game = Game(["England", "Spain"])
+england = game.nations[0]
+spain = game.nations[1]
+england_ship = england.ships[0]
+spain_ship = spain.ships[0]
+
 game.show_economy()
-# Simulate 3 turns
-for _ in range(3):
+
+# Simulate 5 turns
+for i in range(5):
+    print(f"\n--- TURN {game.turn} ---")
+
+    # England blockades Spain every turn
+    england.assign_orders({
+        england_ship.id: (ShipOrder.BLOCKADE, "Spain")
+    })
+
+    if i < 4:
+        # Spain trades (Tier 10)
+        spain.assign_orders({
+            spain_ship.id: (ShipOrder.TRADE, 10)
+        })
+    else:
+        # Turn 5: Spain buys crew and patrols
+        spain.buy_crew(spain_ship, 20)  # buys +20 crew → 30 total
+        spain.assign_orders({
+            spain_ship.id: (ShipOrder.PATROL, None)
+        })
+
+    game.reveal_orders()
+    game.resolve_blockades()
+    game.resolve_trades()
     game.advance_turn()
+
+    # Early end if England is eliminated (e.g., ship sunk)
+    if not england.ships:
+        print("\n☠️ England’s ship was sunk. Blockade lifted. Simulation complete.")
+        break
+
+    if not any(n.name == "Spain" for n in game.nations):
+        print("\n💀 Spain has been eliminated. Simulation complete.")
+        break
