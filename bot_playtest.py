@@ -489,13 +489,19 @@ def default_bot_strategies():
         ),
         BotStrategy(
             name="Human Shadow",
-            trade_weight=1.2,
-            raid_weight=3.3,
-            guard_weight=1.5,
-            fire_weight=0.8,
-            build_priority=["shipyard", "fire_plans"],
-            convoy_bias=0.65,
-            ship_bias=0.85,
+            trade_weight=1.8,
+            raid_weight=2.4,
+            guard_weight=2.2,
+            fire_weight=0.3,
+            build_priority=["shipyard", "guard_captain", "fort"],
+            convoy_bias=0.7,
+            ship_bias=0.8,
+            shipyard_bias=0.55,
+            fort_bias=0.4,
+            trade_guild_bias=0.05,
+            guard_captain_bias=0.35,
+            fire_plans_bias=0.15,
+            construction_idle_bias=0.65,
         ),
         BotStrategy(
             name="Port Reaper",
@@ -546,6 +552,38 @@ def default_bot_strategies():
             build_priority=[],
             convoy_bias=0.04,
             ship_bias=0.8,
+        ),
+        BotStrategy(
+            name="Black Ledger",
+            trade_weight=0.76,
+            raid_weight=4.8,
+            guard_weight=0.93,
+            fire_weight=2.28,
+            build_priority=[],
+            convoy_bias=0.0,
+            ship_bias=0.64,
+            shipyard_bias=0.43,
+            fort_bias=0.02,
+            trade_guild_bias=0.12,
+            guard_captain_bias=0.08,
+            fire_plans_bias=0.12,
+            construction_idle_bias=0.74,
+        ),
+        BotStrategy(
+            name="Bastion Corsair",
+            trade_weight=0.74,
+            raid_weight=4.58,
+            guard_weight=0.21,
+            fire_weight=1.7,
+            build_priority=[],
+            convoy_bias=0.0,
+            ship_bias=0.46,
+            shipyard_bias=0.23,
+            fort_bias=0.21,
+            trade_guild_bias=0.08,
+            guard_captain_bias=0.01,
+            fire_plans_bias=0.04,
+            construction_idle_bias=0.69,
         ),
     ]
 
@@ -736,11 +774,11 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
 
 def print_strategy_benchmark(rows):
     print(
-        "\nOpponent       Games  Wins  Losses  Draws  Win rate  "
+        "\nOpponent         Games  Wins  Losses  Draws  Win rate  "
         "Port wins  Port losses  Avg turns  Avg assets  Opp avg"
     )
     print(
-        "-------------  -----  ----  ------  -----  --------  "
+        "---------------  -----  ----  ------  -----  --------  "
         "---------  -----------  ---------  ----------  -------"
     )
 
@@ -773,7 +811,7 @@ def print_strategy_benchmark_row(row):
     avg_opponent_score = row["opponent_score_total"] / games if games else 0
 
     print(
-        f"{row['opponent']:<13}  {games:>5}  {row['wins']:>4}  "
+        f"{row['opponent']:<15}  {games:>5}  {row['wins']:>4}  "
         f"{row['losses']:>6}  {row['draws']:>5}  "
         f"{win_rate * 100:>7.1f}%  {row['port_wins']:>9}  "
         f"{row['port_losses']:>11}  {avg_turns:>9.1f}  "
@@ -1415,16 +1453,16 @@ def print_self_play_report(games, seed, stats):
 
     rows.sort(reverse=True)
     print(
-        "\nStrategy       Games  Wins  Draws  Port wins  Win rate  "
+        "\nStrategy         Games  Wins  Draws  Port wins  Win rate  "
         "Avg turns  Avg assets  Avg ships"
     )
     print(
-        "-------------  -----  ----  -----  ---------  --------  "
+        "---------------  -----  ----  -----  ---------  --------  "
         "---------  ----------  ---------"
     )
     for win_rate, avg_score, avg_ships, avg_turns, name, row in rows:
         print(
-            f"{name:<13}  {row['games']:>5}  {row['wins']:>4}  "
+            f"{name:<15}  {row['games']:>5}  {row['wins']:>4}  "
             f"{row['draws']:>5}  {row['ports']:>9}  "
             f"{win_rate * 100:>7.1f}%  {avg_turns:>9.1f}  "
             f"{avg_score:>10.1f}  {avg_ships:>9.1f}"

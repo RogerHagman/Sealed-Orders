@@ -1,8 +1,76 @@
 import argparse
+import os
+import sys
+
+
+class UI:
+    enabled = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    colors = {
+        "blue": "34",
+        "cyan": "36",
+        "dim": "2",
+        "green": "32",
+        "magenta": "35",
+        "red": "31",
+        "white": "37",
+        "yellow": "33",
+    }
+
+    @classmethod
+    def paint(cls, text, color=None, bold=False):
+        if not cls.enabled:
+            return text
+
+        codes = []
+        if bold:
+            codes.append("1")
+        if color in cls.colors:
+            codes.append(cls.colors[color])
+        if not codes:
+            return text
+        return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+    @classmethod
+    def section(cls, title, color="cyan"):
+        print()
+        print(cls.paint(f"=== {title} ===", color, bold=True))
+
+    @classmethod
+    def subheading(cls, title, color="blue"):
+        print()
+        print(cls.paint(title, color, bold=True))
+
+    @classmethod
+    def bullet(cls, text, color=None):
+        print(f"  {cls.paint('-', color)} {text}")
+
+    @classmethod
+    def label(cls, text):
+        return cls.paint(text, "white", bold=True)
+
+    @classmethod
+    def field(cls, text, width=15):
+        return cls.label(f"{text:<{width}}")
+
+    @classmethod
+    def muted(cls, text):
+        return cls.paint(text, "dim")
+
+    @classmethod
+    def success(cls, text):
+        return cls.paint(text, "green", bold=True)
+
+    @classmethod
+    def warning(cls, text):
+        return cls.paint(text, "yellow", bold=True)
+
+    @classmethod
+    def danger(cls, text):
+        return cls.paint(text, "red", bold=True)
 
 
 class Rules:
-    VERSION = "0.27"
+    VERSION = "0.31"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -15,7 +83,7 @@ class Rules:
     FIRE_SHIP_UPGRADE_COST = 5
     PORT_ATTACK_SHIPS_REQUIRED = 5
     FORT_COST = 10
-    FORT_LABOR_REQUIRED = 10
+    FORT_LABOR_REQUIRED = 5
     FORT_ASSET_VALUE = 10
     FORT_PORT_DEFENSE = 10
     FORT_FIRE_BLOCKS_PER_TURN = 1
@@ -25,7 +93,7 @@ class Rules:
     GUARD_CAPTAIN_PORT_DEFENSE = 1
     GUARD_CAPTAIN_CONFISCATIONS_PER_TURN = 1
     TRADE_GUILD_COST = 6
-    TRADE_GUILD_LABOR_REQUIRED = 5
+    TRADE_GUILD_LABOR_REQUIRED = 4
     TRADE_GUILD_ASSET_VALUE = 8
     TRADE_GUILD_BONUS_STEP = 3
     MAX_TURNS = 12
@@ -112,14 +180,30 @@ class Nation:
         self.guard_captains = 0
 
     def status_report(self):
-        print(f"{self.name}: {self.gold} gold, {self.ships} ships")
-        print(f"  Treasure route: {self.treasure_value} gold{self.treasure_status}")
-        print(f"  Payroll: {self.payroll_status}")
-        print(f"  Shipyard: {self.shipyard_status}")
-        print(f"  Fort: {self.fort_status}")
-        print(f"  Trade guild: {self.trade_guild_status}")
-        print(f"  Fire ships: {self.fire_ship_status}")
-        print(f"  Guard captains: {self.guard_captain_status}")
+        print(
+            f"{UI.paint(self.name, 'magenta', bold=True)}: "
+            f"{UI.paint(str(self.gold), self.gold_color, bold=True)} gold, "
+            f"{UI.paint(str(self.ships), 'cyan', bold=True)} ships, "
+            f"{UI.paint(str(self.asset_score), 'yellow', bold=True)} assets"
+        )
+        print(
+            f"  {UI.field('Treasure')} "
+            f"{self.treasure_value} gold{self.treasure_status}"
+        )
+        print(f"  {UI.field('Payroll')} {self.payroll_status}")
+        print(f"  {UI.field('Shipyard')} {self.shipyard_status}")
+        print(f"  {UI.field('Fort')} {self.fort_status}")
+        print(f"  {UI.field('Trade guild')} {self.trade_guild_status}")
+        print(f"  {UI.field('Fire ships')} {self.fire_ship_status}")
+        print(f"  {UI.field('Guard captains')} {self.guard_captain_status}")
+
+    @property
+    def gold_color(self):
+        if self.gold < 0:
+            return "red"
+        if self.gold == 0:
+            return "yellow"
+        return "green"
 
     def buy_ships(self, amount):
         cost = amount * self.ship_cost
@@ -402,13 +486,12 @@ class Game:
         self.port_destroyed = None
 
     def play(self):
-        print(f"\n=== SEALED ORDERS v{Rules.VERSION} ===")
-        print("Assign ships to Trade, Raid, Guard, and Fire.")
-        print("Highest total assets after 12 months wins: gold + ship value.")
-        print("Treasure convoys can be launched for a delayed payout.")
-        print("Payroll must launch once between May-August, or it launches in August.")
-        print("Idle ships can build a shipyard that lowers future ship costs.")
-        print("Fire ships are unlocked with a buy-phase upgrade.")
+        UI.section(f"SEALED ORDERS v{Rules.VERSION}", "magenta")
+        UI.bullet("Assign ships to Trade, Raid, Guard, and Fire.", "cyan")
+        UI.bullet("Highest total assets after 12 months wins.", "yellow")
+        UI.bullet("Treasure and payroll convoys create delayed, raidable payouts.")
+        UI.bullet("Idle ships can finish shipyards, forts, and trade guilds.")
+        UI.bullet("Fire ships and guard captains are buy-phase upgrades.")
 
         while self.turn <= Rules.MAX_TURNS and not self.game_over:
             self.play_turn()
@@ -417,7 +500,7 @@ class Game:
         self.show_final_scores()
 
     def play_turn(self):
-        print(f"\n=== {self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS}) ===")
+        UI.section(f"{self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS})")
         self.show_state()
         before_snapshot = self.snapshot_turn()
 
@@ -439,7 +522,7 @@ class Game:
         self.show_turn_summary(before_snapshot, after_snapshot, orders_snapshot)
 
     def show_state(self):
-        print("\nPublic state:")
+        UI.subheading("Public State")
         for player in self.players:
             player.status_report()
 
@@ -467,12 +550,12 @@ class Game:
         }
 
     def show_turn_summary(self, before_snapshot, after_snapshot, orders_snapshot):
-        print(f"\n=== END OF {self.current_month.upper()} SUMMARY ===")
+        UI.section(f"END OF {self.current_month.upper()} SUMMARY", "blue")
         for player in self.players:
             before = before_snapshot[player.name]
             after = after_snapshot[player.name]
             orders = orders_snapshot[player.name]
-            print(f"\n{player.name}")
+            UI.subheading(player.name, "magenta")
             print(f"  Orders: {orders['allocation']}")
             print(f"  Gold: {self.format_delta(before['gold'], after['gold'])}")
             print(f"  Ships: {self.format_delta(before['ships'], after['ships'])}")
@@ -496,7 +579,8 @@ class Game:
     def format_delta(self, before, after):
         delta = after - before
         sign = "+" if delta >= 0 else ""
-        return f"{before} -> {after} ({sign}{delta})"
+        color = "green" if delta > 0 else "red" if delta < 0 else "dim"
+        return f"{before} -> {after} ({UI.paint(f'{sign}{delta}', color, bold=True)})"
 
     def print_status_change(self, label, before, after, key):
         if before[key] == after[key]:
@@ -509,25 +593,25 @@ class Game:
         return Rules.MONTHS[self.turn - 1]
 
     def show_player_economy(self, player):
-        print(f"\n{player.name}'s economy - {self.current_month}")
+        UI.section(f"{player.name}'s Economy - {self.current_month}", "blue")
         player.status_report()
         print(
-            f"  Asset score if game ended now: {player.asset_score} "
+            f"  {UI.field('Assets')} {UI.paint(str(player.asset_score), 'yellow', bold=True)} "
             f"(shipyard value: {player.shipyard_value}, "
             f"fort value: {player.fort_value}, "
             f"trade guild value: {player.trade_guild_value})"
         )
         print(
-            f"  Trade income: {Rules.TRADE_INCOME} gold, "
+            f"  {UI.field('Economy')} Trade income: {Rules.TRADE_INCOME} gold, "
             f"smuggle income: {Rules.SMUGGLE_INCOME} gold, "
             f"guard captain cost: {Rules.GUARD_CAPTAIN_COST} gold"
         )
         print(
-            f"  Ship cost: {player.ship_cost} gold, "
+            f"  {UI.field('Ships')} Cost: {player.ship_cost} gold, "
             f"ship value: {Rules.SHIP_COST} gold"
         )
         if not player.payroll_launched:
-            print(f"  Payroll launch cost: {player.payroll_cost} gold")
+            print(f"  {UI.field('Payroll cost')} {player.payroll_cost} gold")
 
     def pause_for_private_entry(self, player):
         self.clear_between_players()
@@ -551,8 +635,10 @@ class Game:
                 return allocation
 
             print(
-                f"Invalid allocation: assigned {allocation.total} ships, "
-                f"but only {player.ships} are available."
+                UI.danger(
+                    f"Invalid allocation: assigned {allocation.total} ships, "
+                    f"but only {player.ships} are available."
+                )
             )
 
     def prompt_non_negative_int(self, prompt):
@@ -561,11 +647,11 @@ class Game:
             try:
                 value = int(raw_value)
             except ValueError:
-                print("Please enter a whole number.")
+                print(UI.warning("Please enter a whole number."))
                 continue
 
             if value < 0:
-                print("Please enter zero or a positive number.")
+                print(UI.warning("Please enter zero or a positive number."))
                 continue
 
             return value
@@ -574,15 +660,15 @@ class Game:
         print("\n" * 40)
 
     def reveal_orders(self):
-        print("\n=== REVEALING SEALED ORDERS ===")
+        UI.section("REVEALING SEALED ORDERS", "magenta")
         for player in self.players:
-            print(f"{player.name}: {player.allocation}")
+            print(f"{UI.paint(player.name, 'magenta', bold=True)}: {player.allocation}")
 
     def pause_after_resolution(self):
         input("\nPress Enter to continue to port labor, convoy arrivals, and buy phase...")
 
     def resolve_orders(self):
-        print("\n=== RESOLUTION ===")
+        UI.section("RESOLUTION", "red")
         player_one, player_two = self.players
         for player in self.players:
             player.reset_fort_fire_blocks()
@@ -864,7 +950,7 @@ class Game:
         return max(1, completed_trade // Rules.TRADE_GUILD_BONUS_STEP)
 
     def apply_port_labor(self):
-        print("\n=== PORT LABOR ===")
+        UI.section("PORT LABOR", "blue")
         any_labor = False
 
         for player in self.players:
@@ -923,7 +1009,7 @@ class Game:
             print("No port labor is applied this turn.")
 
     def advance_convoys(self):
-        print("\n=== CONVOY ARRIVALS ===")
+        UI.section("CONVOY ARRIVALS", "yellow")
         any_convoys = False
 
         for player in self.players:
@@ -958,7 +1044,7 @@ class Game:
             print("No convoys arrive this turn.")
 
     def buy_phase(self):
-        print("\n=== BUY PHASE ===")
+        UI.section("BUY PHASE", "green")
         for player in self.players:
             self.run_buy_menu(player)
 
@@ -970,13 +1056,20 @@ class Game:
         while True:
             self.show_player_economy(player)
             actions = self.buy_menu_actions(player)
-            print(f"\n{player.name}, choose a buy-phase action.")
+            UI.subheading(f"{player.name}, choose a buy-phase action.", "green")
             for choice, label, _action, disabled_reason in actions:
                 if disabled_reason:
-                    print(f"{choice}. {label} - {disabled_reason}")
+                    print(
+                        UI.muted(
+                            f"{choice}. {label:<24} - {disabled_reason}"
+                        )
+                    )
                 else:
-                    print(f"{choice}. {label}")
-            print("0. Done")
+                    print(
+                        f"{UI.paint(choice + '.', 'green', bold=True)} "
+                        f"{label}"
+                    )
+            print(f"{UI.paint('0.', 'green', bold=True)} Done")
 
             raw_choice = input(f"{player.name}, action: ").strip()
             if raw_choice == "0":
@@ -990,12 +1083,12 @@ class Game:
                     break
 
             if selected_action is None:
-                print("Please choose a listed number.")
+                print(UI.warning("Please choose a listed number."))
                 continue
 
             action, disabled_reason = selected_action
             if disabled_reason:
-                print(f"That action is unavailable: {disabled_reason}.")
+                print(UI.warning(f"That action is unavailable: {disabled_reason}."))
                 continue
 
             action(player)
@@ -1122,106 +1215,110 @@ class Game:
             if amount <= affordable:
                 player.buy_ships(amount)
                 if amount:
-                    print(f"{player.name} buys {amount} ship(s).")
+                    print(UI.success(f"{player.name} buys {amount} ship(s)."))
                 else:
                     print(f"{player.name} buys no ships.")
                 return
 
-            print(f"{player.name} can only afford {affordable} ship(s).")
+            print(UI.warning(f"{player.name} can only afford {affordable} ship(s)."))
 
     def start_shipyard_action(self, player):
         player.start_shipyard()
-        print(
+        print(UI.success(
             f"{player.name} starts a shipyard. Idle ships will add labor "
             f"on future turns."
-        )
+        ))
 
     def start_fort_action(self, player):
         player.start_fort()
-        print(
+        print(UI.success(
             f"{player.name} starts a fort. Idle ships will add labor "
             f"on future turns."
-        )
+        ))
 
     def start_trade_guild_action(self, player):
         player.start_trade_guild()
-        print(
+        print(UI.success(
             f"{player.name} starts a trade guild. Idle ships will add labor "
             f"on future turns."
-        )
+        ))
 
     def buy_fire_ship_plans_action(self, player):
         player.unlock_fire_ships()
-        print(f"{player.name} can assign fire ships starting next turn.")
+        print(UI.success(f"{player.name} can assign fire ships starting next turn."))
 
     def hire_guard_captain_action(self, player):
         player.hire_guard_captain()
-        print(
+        print(UI.success(
             f"{player.name} hires a guard captain "
             f"({player.guard_captains}/{Rules.GUARD_CAPTAIN_MAX})."
-        )
+        ))
 
     def launch_treasure_action(self, player):
         player.launch_treasure()
-        print(
+        print(UI.success(
             f"{player.name} launches a treasure convoy worth "
             f"{player.treasure_value} gold."
-        )
+        ))
 
     def auto_launch_final_payroll(self, player):
         if player.payroll_launched or self.turn < Rules.PAYROLL_FINAL_TURN:
             return
 
         cost = player.launch_payroll()
-        print(
+        print(UI.warning(
             f"{player.name}'s payroll convoy launches automatically "
             f"with {player.payroll_value} gold after paying {cost} gold."
-        )
+        ))
 
     def launch_payroll_action(self, player):
         cost = player.launch_payroll()
-        print(
+        print(UI.success(
             f"{player.name} launches payroll convoy with "
             f"{player.payroll_value} gold after paying {cost} gold."
-        )
+        ))
 
     def prompt_yes_no(self, prompt):
         raw_value = input(prompt).strip().lower()
         return raw_value in {"y", "yes"}
 
     def show_final_scores(self):
-        print("\n=== FINAL SCORES ===")
+        UI.section("FINAL SCORES", "yellow")
         for player in self.players:
             print(
-                f"{player.name}: {player.gold} gold + "
+                f"{UI.paint(player.name, 'magenta', bold=True)}: "
+                f"{player.gold} gold + "
                 f"{player.ships} ships ({player.ship_value} value) + "
                 f"shipyard ({player.shipyard_value} value) + "
                 f"fort ({player.fort_value} value) + "
                 f"trade guild ({player.trade_guild_value} value) + "
                 f"guard captains ({player.guard_captains}) = "
-                f"{player.asset_score} total assets"
+                f"{UI.paint(str(player.asset_score), 'yellow', bold=True)} total assets"
             )
 
         player_one, player_two = self.players
         if self.port_destroyer is not None:
             print(
-                f"\n{self.port_destroyer.name} wins by destroying "
-                f"{self.port_destroyed.name}'s home port!"
+                UI.success(
+                    f"\n{self.port_destroyer.name} wins by destroying "
+                    f"{self.port_destroyed.name}'s home port!"
+                )
             )
             return
 
         if player_one.asset_score > player_two.asset_score:
-            print(f"\n{player_one.name} wins!")
+            print(UI.success(f"\n{player_one.name} wins!"))
         elif player_two.asset_score > player_one.asset_score:
-            print(f"\n{player_two.name} wins!")
+            print(UI.success(f"\n{player_two.name} wins!"))
         else:
-            print("\nThe game ends in a draw.")
+            print(UI.warning("\nThe game ends in a draw."))
 
 
 def prompt_player_names():
     names = []
     defaults = ["England", "Spain"]
 
+    UI.section("PLAYER SETUP", "magenta")
     print("Enter player names, or press Enter to use the default names.")
     for index, default in enumerate(defaults, start=1):
         name = input(f"Player {index} name [{default}]: ").strip()
@@ -1235,6 +1332,33 @@ def prompt_human_name():
     return name or "England"
 
 
+def prompt_ai_strategy(strategy_names):
+    default_strategy = "Privateer"
+    UI.section("CHOOSE AI OPPONENT", "magenta")
+    for index, strategy_name in enumerate(strategy_names, start=1):
+        default_marker = " [default]" if strategy_name == default_strategy else ""
+        print(
+            f"{UI.paint(str(index) + '.', 'green', bold=True)} "
+            f"{strategy_name}{UI.muted(default_marker)}"
+        )
+
+    while True:
+        choice = input(f"AI opponent [{default_strategy}]: ").strip()
+        if not choice:
+            return default_strategy
+
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(strategy_names):
+                return strategy_names[index - 1]
+
+        for strategy_name in strategy_names:
+            if strategy_name.lower() == choice.lower():
+                return strategy_name
+
+        print(UI.warning("Please choose a listed number or strategy name."))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Play or simulate Sealed Orders.")
     parser.add_argument(
@@ -1244,8 +1368,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--ai-strategy",
-        default="Privateer",
-        help="AI strategy for --play-ai (default: Privateer)",
+        help="AI strategy for --play-ai; omit to choose from a menu",
     )
     parser.add_argument(
         "--ai-log",
@@ -1347,13 +1470,14 @@ if __name__ == "__main__":
 
         summarize_ai_games(log_path=args.ai_log)
     elif args.play_ai:
-        from bot_playtest import find_strategy, play_vs_ai
+        from bot_playtest import find_strategy, play_vs_ai, strategy_names
 
         try:
-            find_strategy(args.ai_strategy)
+            strategy_name = args.ai_strategy or prompt_ai_strategy(strategy_names())
+            find_strategy(strategy_name)
             play_vs_ai(
                 human_name=prompt_human_name(),
-                strategy_name=args.ai_strategy,
+                strategy_name=strategy_name,
                 seed=args.seed,
                 log_path=args.ai_log,
             )

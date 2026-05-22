@@ -74,8 +74,9 @@
 ## Version 0.16
 
 - Added human-vs-AI mode.
-- Run `python3 main.py --play-ai` to face the default Privateer AI.
-- Use `--ai-strategy Merchant`, `Privateer`, `Builder`, `Admiral`, or `Opportunist`.
+- Run `python3 main.py --play-ai` to choose an AI opponent.
+- Run `python3 main.py --play-ai` without `--ai-strategy` to choose an opponent from a menu.
+- Use `--ai-strategy "Privateer"` or another bot name to skip the menu.
 - Add `--seed 1` for repeatable AI choices while testing.
 
 ## Version 0.17
@@ -146,3 +147,23 @@
 - Guard captains confiscate 1 gold each from enemy trade ships that smuggle past this nation's guards.
 - Guard captains add +1 home port defense each only while their nation also has a completed fort.
 - Evolving strategies now learn a guard captain buy bias and training history records captain use.
+
+## Version 0.28
+
+- Added `Black Ledger`, the v11 infrastructure-raider hybrid, to the default bot roster.
+- Human-vs-AI mode now shows a strategy selection menu when `--ai-strategy` is omitted.
+
+## Version 0.29
+
+- Updated `Human Shadow` from the latest recorded human-vs-AI games.
+- Human Shadow now favors shipyard, guard captain, and fort play with more balanced trade, raid, and guard orders.
+
+## Version 0.30
+
+- Added `Bastion Corsair`, the v12 fort-raider hybrid, to the default bot roster.
+
+## Version 0.31
+
+- Added terminal color and cleaner section headers for the interactive game UI.
+- Reworked public state, economy, buy phase, turn summary, and final score presentation for easier scanning.
+- Color automatically stays off when output is redirected or `NO_COLOR` is set.
