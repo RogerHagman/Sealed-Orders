@@ -2,7 +2,7 @@ import argparse
 
 
 class Rules:
-    VERSION = "0.23"
+    VERSION = "0.24"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -45,7 +45,9 @@ class Rules:
     PAYROLL_FINAL_TURN = 8
     PAYROLL_TRAVEL_TURNS = 1
     PAYROLL_VALUE_PER_SHIP = 1
+    PAYROLL_COST_PER_SHIP = 1
     PAYROLL_MUTINY_PERCENT = 0.25
+    TRADE_GUILD_PAYROLL_DISCOUNT_PERCENT = 25
 
 
 class Allocation:
@@ -230,6 +232,15 @@ class Nation:
         return self.payroll_turns_remaining > 0
 
     @property
+    def payroll_cost(self):
+        cost = self.ships * Rules.PAYROLL_COST_PER_SHIP
+        if self.trade_guild_completed:
+            cost *= 100 - Rules.TRADE_GUILD_PAYROLL_DISCOUNT_PERCENT
+            cost = (cost + 99) // 100
+
+        return cost
+
+    @property
     def treasure_status(self):
         if self.has_treasure_at_sea:
             return f" at sea, arrives in {self.treasure_turns_remaining} turn(s)"
@@ -308,8 +319,11 @@ class Nation:
 
     def launch_payroll(self):
         self.payroll_launched = True
+        cost = self.payroll_cost
+        self.gold -= cost
         self.payroll_value = self.ships * Rules.PAYROLL_VALUE_PER_SHIP
         self.payroll_turns_remaining = Rules.PAYROLL_TRAVEL_TURNS
+        return cost
 
     def complete_payroll(self):
         payout = self.payroll_value
@@ -460,6 +474,8 @@ class Game:
             f"  Ship cost: {player.ship_cost} gold, "
             f"ship value: {Rules.SHIP_COST} gold"
         )
+        if not player.payroll_launched:
+            print(f"  Payroll launch cost: {player.payroll_cost} gold")
 
     def pause_for_private_entry(self, player):
         self.clear_between_players()
@@ -1048,17 +1064,17 @@ class Game:
         if player.payroll_launched or self.turn < Rules.PAYROLL_FINAL_TURN:
             return
 
-        player.launch_payroll()
+        cost = player.launch_payroll()
         print(
             f"{player.name}'s payroll convoy launches automatically "
-            f"with {player.payroll_value} gold."
+            f"with {player.payroll_value} gold after paying {cost} gold."
         )
 
     def launch_payroll_action(self, player):
-        player.launch_payroll()
+        cost = player.launch_payroll()
         print(
             f"{player.name} launches payroll convoy with "
-            f"{player.payroll_value} gold."
+            f"{player.payroll_value} gold after paying {cost} gold."
         )
 
     def prompt_yes_no(self, prompt):

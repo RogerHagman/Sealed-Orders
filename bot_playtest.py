@@ -483,6 +483,16 @@ def default_bot_strategies():
             convoy_bias=0.32,
             ship_bias=0.74,
         ),
+        BotStrategy(
+            name="Iron Tempest",
+            trade_weight=2.61,
+            raid_weight=4.06,
+            guard_weight=2.4,
+            fire_weight=4.44,
+            build_priority=[],
+            convoy_bias=0.04,
+            ship_bias=0.8,
+        ),
     ]
 
 

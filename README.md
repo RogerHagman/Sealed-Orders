@@ -122,3 +122,9 @@
 - Fort labor reduced from 10 to 5, while port defense rises from +5 to +10.
 - Shipyard labor reduced from 5 to 3, and ship discount rises from 1 to 2.
 - Trade guild cost reduced from 8 to 6, labor from 6 to 5, and bonus step from 5 to 3.
+
+## Version 0.24
+
+- Added `Iron Tempest`, the v6 evolved generalist, to the default bot roster.
+- Payroll launch now costs 1 gold per ship and can take a nation below 0 gold.
+- Completed trade guilds reduce payroll launch cost by 25%, rounded up.
