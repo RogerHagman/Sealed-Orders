@@ -1,5 +1,5 @@
 class Rules:
-    VERSION = "0.12"
+    VERSION = "0.13"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -368,6 +368,7 @@ class Game:
         self.resolve_orders()
         if self.game_over:
             return
+        self.pause_after_resolution()
         self.apply_port_labor()
         self.advance_convoys()
         self.buy_phase()
@@ -447,6 +448,9 @@ class Game:
         print("\n=== REVEALING SEALED ORDERS ===")
         for player in self.players:
             print(f"{player.name}: {player.allocation}")
+
+    def pause_after_resolution(self):
+        input("\nPress Enter to continue to port labor, convoy arrivals, and buy phase...")
 
     def resolve_orders(self):
         print("\n=== RESOLUTION ===")
@@ -791,159 +795,210 @@ class Game:
     def buy_phase(self):
         print("\n=== BUY PHASE ===")
         for player in self.players:
-            self.show_player_economy(player)
-            self.prompt_shipyard_start(player)
-            self.prompt_fort_start(player)
-            self.prompt_trade_guild_start(player)
-            self.prompt_fire_ship_upgrade(player)
-            affordable = player.gold // player.ship_cost
-
-            while True:
-                amount = self.prompt_non_negative_int(
-                    f"{player.name}, buy ships for {player.ship_cost} gold each "
-                    f"(affordable: {affordable}): "
-                )
-
-                if amount <= affordable:
-                    player.buy_ships(amount)
-                    if amount:
-                        print(f"{player.name} buys {amount} ship(s).")
-                    else:
-                        print(f"{player.name} buys no ships.")
-                    break
-
-                print(f"{player.name} can only afford {affordable} ship(s).")
-
-            self.prompt_treasure_launch(player)
-            self.prompt_payroll_launch(player)
+            self.run_buy_menu(player)
 
         self.show_state()
 
-    def prompt_treasure_launch(self, player):
+    def run_buy_menu(self, player):
+        self.auto_launch_final_payroll(player)
+
+        while True:
+            self.show_player_economy(player)
+            actions = self.buy_menu_actions(player)
+            print(f"\n{player.name}, choose a buy-phase action.")
+            for choice, label, _action, disabled_reason in actions:
+                if disabled_reason:
+                    print(f"{choice}. {label} - {disabled_reason}")
+                else:
+                    print(f"{choice}. {label}")
+            print("0. Done")
+
+            raw_choice = input(f"{player.name}, action: ").strip()
+            if raw_choice == "0":
+                print(f"{player.name} finishes the buy phase.")
+                return
+
+            selected_action = None
+            for choice, _label, action, disabled_reason in actions:
+                if raw_choice == choice:
+                    selected_action = (action, disabled_reason)
+                    break
+
+            if selected_action is None:
+                print("Please choose a listed number.")
+                continue
+
+            action, disabled_reason = selected_action
+            if disabled_reason:
+                print(f"That action is unavailable: {disabled_reason}.")
+                continue
+
+            action(player)
+
+    def buy_menu_actions(self, player):
+        return [
+            ("1", "Buy ships", self.buy_ships_action, self.buy_ships_disabled_reason(player)),
+            (
+                "2",
+                "Start shipyard",
+                self.start_shipyard_action,
+                self.shipyard_disabled_reason(player),
+            ),
+            ("3", "Start fort", self.start_fort_action, self.fort_disabled_reason(player)),
+            (
+                "4",
+                "Start trade guild",
+                self.start_trade_guild_action,
+                self.trade_guild_disabled_reason(player),
+            ),
+            (
+                "5",
+                "Buy fire ship plans",
+                self.buy_fire_ship_plans_action,
+                self.fire_ship_plans_disabled_reason(player),
+            ),
+            (
+                "6",
+                "Launch treasure convoy",
+                self.launch_treasure_action,
+                self.treasure_launch_disabled_reason(player),
+            ),
+            (
+                "7",
+                "Launch payroll convoy",
+                self.launch_payroll_action,
+                self.payroll_launch_disabled_reason(player),
+            ),
+        ]
+
+    def buy_ships_disabled_reason(self, player):
+        if player.gold < player.ship_cost:
+            return f"too expensive ({player.ship_cost} gold needed)"
+        return None
+
+    def shipyard_disabled_reason(self, player):
+        if player.shipyard_completed:
+            return "already completed"
+        if player.shipyard_started:
+            return "already started"
+        if player.gold < Rules.SHIPYARD_COST:
+            return f"too expensive ({Rules.SHIPYARD_COST} gold needed)"
+        return None
+
+    def fort_disabled_reason(self, player):
+        if player.fort_completed:
+            return "already completed"
+        if player.fort_started:
+            return "already started"
+        if player.gold < Rules.FORT_COST:
+            return f"too expensive ({Rules.FORT_COST} gold needed)"
+        return None
+
+    def trade_guild_disabled_reason(self, player):
+        if player.trade_guild_completed:
+            return "already completed"
+        if player.trade_guild_started:
+            return "already started"
+        if player.gold < Rules.TRADE_GUILD_COST:
+            return f"too expensive ({Rules.TRADE_GUILD_COST} gold needed)"
+        return None
+
+    def fire_ship_plans_disabled_reason(self, player):
+        if player.fire_ships_unlocked:
+            return "already unlocked"
+        if player.gold < Rules.FIRE_SHIP_UPGRADE_COST:
+            return f"too expensive ({Rules.FIRE_SHIP_UPGRADE_COST} gold needed)"
+        return None
+
+    def treasure_launch_disabled_reason(self, player):
         if player.has_treasure_at_sea:
-            print(f"{player.name}'s treasure convoy is already at sea.")
-            return
+            return "convoy already at sea"
 
         latest_launch_turn = Rules.MAX_TURNS - Rules.TREASURE_TRAVEL_TURNS
         if self.turn > latest_launch_turn:
-            print(f"It is too late for {player.name} to launch a treasure convoy.")
-            return
+            return "too late"
 
-        if self.prompt_yes_no(
-            f"{player.name}, launch treasure convoy worth "
-            f"{player.treasure_value} gold? [y/N]: "
-        ):
-            player.launch_treasure()
-            print(
-                f"{player.name} launches a treasure convoy worth "
-                f"{player.treasure_value} gold."
-            )
+        return None
 
-    def prompt_payroll_launch(self, player):
+    def payroll_launch_disabled_reason(self, player):
         if player.payroll_launched:
-            return
+            return "already launched"
 
         if self.turn < Rules.PAYROLL_START_TURN:
-            return
+            return "too early"
 
         if self.turn >= Rules.PAYROLL_FINAL_TURN:
-            player.launch_payroll()
-            print(
-                f"{player.name}'s payroll convoy launches automatically "
-                f"with {player.payroll_value} gold."
+            return "launches automatically this month"
+
+        return None
+
+    def buy_ships_action(self, player):
+        affordable = player.gold // player.ship_cost
+
+        while True:
+            amount = self.prompt_non_negative_int(
+                f"{player.name}, buy ships for {player.ship_cost} gold each "
+                f"(affordable: {affordable}): "
             )
+
+            if amount <= affordable:
+                player.buy_ships(amount)
+                if amount:
+                    print(f"{player.name} buys {amount} ship(s).")
+                else:
+                    print(f"{player.name} buys no ships.")
+                return
+
+            print(f"{player.name} can only afford {affordable} ship(s).")
+
+    def start_shipyard_action(self, player):
+        player.start_shipyard()
+        print(
+            f"{player.name} starts a shipyard. Idle ships will add labor "
+            f"on future turns."
+        )
+
+    def start_fort_action(self, player):
+        player.start_fort()
+        print(
+            f"{player.name} starts a fort. Idle ships will add labor "
+            f"on future turns."
+        )
+
+    def start_trade_guild_action(self, player):
+        player.start_trade_guild()
+        print(
+            f"{player.name} starts a trade guild. Idle ships will add labor "
+            f"on future turns."
+        )
+
+    def buy_fire_ship_plans_action(self, player):
+        player.unlock_fire_ships()
+        print(f"{player.name} can assign fire ships starting next turn.")
+
+    def launch_treasure_action(self, player):
+        player.launch_treasure()
+        print(
+            f"{player.name} launches a treasure convoy worth "
+            f"{player.treasure_value} gold."
+        )
+
+    def auto_launch_final_payroll(self, player):
+        if player.payroll_launched or self.turn < Rules.PAYROLL_FINAL_TURN:
             return
 
-        if self.prompt_yes_no(f"{player.name}, launch mandatory payroll convoy now? [y/N]: "):
-            player.launch_payroll()
-            print(
-                f"{player.name} launches payroll convoy with "
-                f"{player.payroll_value} gold."
-            )
-        else:
-            print(
-                f"{player.name} delays payroll. It must launch by "
-                f"{Rules.MONTHS[Rules.PAYROLL_FINAL_TURN - 1]}."
-            )
+        player.launch_payroll()
+        print(
+            f"{player.name}'s payroll convoy launches automatically "
+            f"with {player.payroll_value} gold."
+        )
 
-    def prompt_shipyard_start(self, player):
-        if player.shipyard_started:
-            return
-
-        if player.gold < Rules.SHIPYARD_COST:
-            print(
-                f"{player.name} cannot afford to start a shipyard "
-                f"({Rules.SHIPYARD_COST} gold needed)."
-            )
-            return
-
-        if self.prompt_yes_no(
-            f"{player.name}, start shipyard for {Rules.SHIPYARD_COST} gold? [y/N]: "
-        ):
-            player.start_shipyard()
-            print(
-                f"{player.name} starts a shipyard. Idle ships will add labor "
-                f"on future turns."
-            )
-
-    def prompt_fort_start(self, player):
-        if player.fort_started:
-            return
-
-        if player.gold < Rules.FORT_COST:
-            print(
-                f"{player.name} cannot afford to start a fort "
-                f"({Rules.FORT_COST} gold needed)."
-            )
-            return
-
-        if self.prompt_yes_no(
-            f"{player.name}, start fort for {Rules.FORT_COST} gold? [y/N]: "
-        ):
-            player.start_fort()
-            print(
-                f"{player.name} starts a fort. Idle ships will add labor "
-                f"on future turns."
-            )
-
-    def prompt_trade_guild_start(self, player):
-        if player.trade_guild_started:
-            return
-
-        if player.gold < Rules.TRADE_GUILD_COST:
-            print(
-                f"{player.name} cannot afford to start a trade guild "
-                f"({Rules.TRADE_GUILD_COST} gold needed)."
-            )
-            return
-
-        if self.prompt_yes_no(
-            f"{player.name}, start trade guild for "
-            f"{Rules.TRADE_GUILD_COST} gold? [y/N]: "
-        ):
-            player.start_trade_guild()
-            print(
-                f"{player.name} starts a trade guild. Idle ships will add labor "
-                f"on future turns."
-            )
-
-    def prompt_fire_ship_upgrade(self, player):
-        if player.fire_ships_unlocked:
-            return
-
-        if player.gold < Rules.FIRE_SHIP_UPGRADE_COST:
-            print(
-                f"{player.name} cannot afford fire ship plans "
-                f"({Rules.FIRE_SHIP_UPGRADE_COST} gold needed)."
-            )
-            return
-
-        if self.prompt_yes_no(
-            f"{player.name}, buy fire ship plans for "
-            f"{Rules.FIRE_SHIP_UPGRADE_COST} gold? [y/N]: "
-        ):
-            player.unlock_fire_ships()
-            print(f"{player.name} can assign fire ships starting next turn.")
+    def launch_payroll_action(self, player):
+        player.launch_payroll()
+        print(
+            f"{player.name} launches payroll convoy with "
+            f"{player.payroll_value} gold."
+        )
 
     def prompt_yes_no(self, prompt):
         raw_value = input(prompt).strip().lower()

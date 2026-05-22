@@ -49,3 +49,10 @@
 - A completed trade guild adds bonus gold from completed trade each turn.
 - Trade guild bonus is 1 gold minimum when at least 1 trade ship completes trade, then +1 gold per full 5 completed trade ships.
 - Completed trade guilds count as 8 value in final asset scoring.
+
+## Version 0.13
+
+- Buy phase now uses a repeatable numbered action menu.
+- Unavailable buy-phase actions stay visible with disabled reasons.
+- Players can take multiple buy-phase actions before choosing Done.
+- Final-month payroll still launches automatically before menu actions.
