@@ -1,311 +1,778 @@
-import uuid
-import random
-
-
 class Rules:
-    # === Food System ===
-    FOOD_COST = 1  # Standard food cost per unit
-    BLOCKADED_FOOD_COST = 2  # Doubled food cost when blockaded
+    VERSION = "0.10"
+    STARTING_GOLD = 5
+    STARTING_SHIPS = 3
+    TRADE_INCOME = 2
+    SMUGGLE_INCOME = 1
+    SHIP_COST = 5
+    SHIPYARD_COST = 5
+    SHIPYARD_LABOR_REQUIRED = 5
+    SHIPYARD_DISCOUNT = 1
+    SHIPYARD_ASSET_VALUE = 5
+    FIRE_SHIP_UPGRADE_COST = 5
+    PORT_ATTACK_SHIPS_REQUIRED = 5
+    MAX_TURNS = 12
+    MONTHS = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    TREASURE_BASE_VALUE = 10
+    TREASURE_TRADE_PERCENT = 0.25
+    TREASURE_TRAVEL_TURNS = 2
+    PAYROLL_START_TURN = 5
+    PAYROLL_FINAL_TURN = 8
+    PAYROLL_TRAVEL_TURNS = 1
+    PAYROLL_VALUE_PER_SHIP = 1
+    PAYROLL_MUTINY_PERCENT = 0.25
 
-    PORT_FOOD_PER_TURN = 1  # Port consumes 1 food per turn
-    INITIAL_PORT_FOOD = 5  # Port starts with 5 food
-    PORT_RESUPPLY_RATE = 1  # Gains 1 food per turn if not blockaded
 
-    CREW_FOOD_COST = 1 / 10  # 1 food per 10 crew per turn
-    MIN_CREW = 10  # Minimum crew per ship
+class Allocation:
+    def __init__(self, trade=0, raid=0, guard=0, fire=0):
+        self.trade = trade
+        self.raid = raid
+        self.guard = guard
+        self.fire = fire
 
-    # === Economy ===
-    STARTING_GOLD = 10
-    STARTING_CREW = 10
-    STARTING_SHIPS = 1
-
-    CREW_COST = 1  # 10 crew per 1 gold
-    SHIP_COST = 10  # Cost of new ship
-    FOOD_UNIT_COST = 1  # If buying manually
-
-    # === Trade Missions ===
-    TRADE_MISSION_COSTS = [5, 10, 20]
-    TRADE_RETURN_RANGES = {
-        5: (7, 9),
-        10: (13, 18),
-        20: (27, 35)
-    }
-    TRADE_FAILURE_CHANCE = 0.1  # Failure if detected
-
-    # === Blockade Mechanics ===
-    BLOCKADE_COST = 1
-    MAX_BLOCKADE_TURNS = 5
-    BLOCKADE_BREAK_ALLOWED = True
-
-    # === Combat & Detection ===
-    DETECTION_BASE_CHANCE = 0.5
-    GREAT_SEA_BATTLE_ENABLED = True
-    CREW_UPKEEP_PER_10 = 1
-    BLOCKADED_CREW_UPKEEP_PER_10 = 2
-
-class Ship:
-    def __init__(self, owner, crew=Rules.MIN_CREW):
-        self.id = str(uuid.uuid4())[:8]
-        self.owner = owner
-        self.crew = crew
-        self.order = ShipOrder.IDLE  # default each turn
+    @property
+    def total(self):
+        return self.trade + self.raid + self.guard + self.fire
 
     def __repr__(self):
-        return f"Ship({self.id}, crew={self.crew}, order={self.order})"
+        return (
+            f"Trade {self.trade}, Raid {self.raid}, Guard {self.guard}, "
+            f"Fire {self.fire}"
+        )
 
-class ShipOrder:
-    IDLE = "idle"
-    TRADE = "trade"
-    BLOCKADE = "blockade"
-    ATTACK = "attack"
-    PATROL = "patrol"
+
+class ResolutionResult:
+    def __init__(self, trade_income=0, stolen_income=0, treasure_growth=0):
+        self.trade_income = trade_income
+        self.stolen_income = stolen_income
+        self.treasure_growth = treasure_growth
 
 
 class Nation:
     def __init__(self, name):
         self.name = name
         self.gold = Rules.STARTING_GOLD
-        self.port_food = Rules.INITIAL_PORT_FOOD
-        self.ships = [Ship(owner=self) for _ in range(Rules.STARTING_SHIPS)]
-        self.blockade_turns = 0
-        self.is_blockaded = False
-
-    def resupply_port(self):
-        if not self.is_blockaded:
-            self.port_food += Rules.PORT_RESUPPLY_RATE
-
-    def consume_port_food(self):
-        self.port_food = max(0, self.port_food - Rules.PORT_FOOD_PER_TURN)
-
-    def buy_crew(self, ship, crew_amount):
-        """
-        Buys crew in multiples of 10. Each 10 crew costs 1 gold.
-        """
-        blocks = crew_amount // 10
-        cost = blocks * Rules.CREW_COST
-        if self.gold >= cost:
-            self.gold -= cost
-            ship.crew += blocks * 10
-            print(f" 🧑‍✈️ {self.name} recruited {blocks * 10} crew for ship {ship.id} (cost {cost} gold)")
-        else:
-            print(f" ⚠️ {self.name} can't afford to buy {crew_amount} crew (needs {cost} gold)")
-
-    def assign_orders(self, assignments):
-        """
-        assignments: dict of {ship_id: (order_type, target_or_tier)}
-        Example: { 'a1b2c3': ('trade', 10), 'd4e5f6': ('blockade', 'Spain') }
-        """
-        for ship in self.ships:
-            if ship.id in assignments:
-                order, target = assignments[ship.id]
-
-                if order == ShipOrder.TRADE:
-                    trade_tier = target  # target is actually trade tier (5, 10, 20)
-                    if trade_tier not in Rules.TRADE_MISSION_COSTS:
-                        print(f" ⚠️ Invalid trade tier: {trade_tier}")
-                        continue
-                    if self.gold < trade_tier:
-                        print(f" ⚠️ {self.name} can't afford to fund trade mission of tier {trade_tier}")
-                        continue
-                    self.gold -= trade_tier
-                    ship.trade_tier = trade_tier
-                    ship.order = (ShipOrder.TRADE, None)
-                    print(f" 💼 {self.name} assigned ship {ship.id} to trade (tier {trade_tier}), paid {trade_tier} gold")
-                else:
-                    ship.order = (order, target)
-
+        self.ships = Rules.STARTING_SHIPS
+        self.allocation = Allocation()
+        self.treasure_value = Rules.TREASURE_BASE_VALUE
+        self.treasure_turns_remaining = 0
+        self.payroll_launched = False
+        self.payroll_value = 0
+        self.payroll_turns_remaining = 0
+        self.shipyard_started = False
+        self.shipyard_completed = False
+        self.shipyard_labor = 0
+        self.fire_ships_unlocked = False
 
     def status_report(self):
-        print(f"\n=== {self.name.upper()} ===")
-        print(f"Gold: {self.gold}")
-        print(f"Port Food: {self.port_food}")
-        print(f"Ships: {len(self.ships)}")
-        for ship in self.ships:
-            print(f"  - {ship}")
-    
-class Upkeep:
-    @staticmethod
-    def apply(nation):
-        print(f"\n⏳ Applying upkeep for {nation.name}...")
+        print(f"{self.name}: {self.gold} gold, {self.ships} ships")
+        print(f"  Treasure route: {self.treasure_value} gold{self.treasure_status}")
+        print(f"  Payroll: {self.payroll_status}")
+        print(f"  Shipyard: {self.shipyard_status}")
+        print(f"  Fire ships: {self.fire_ship_status}")
 
-        # Resupply port (if not blockaded)
-        if not nation.is_blockaded:
-            nation.resupply_port()
-            print(f" - Port resupplied with {Rules.PORT_RESUPPLY_RATE} food (now: {nation.port_food})")
-        else:
-            print(f" - Port is blockaded, no resupply.")
+    def buy_ships(self, amount):
+        cost = amount * self.ship_cost
+        self.gold -= cost
+        self.ships += amount
 
-        # Consume 1 food from port
-        nation.consume_port_food()
-        print(f" - Port consumed {Rules.PORT_FOOD_PER_TURN} food (remaining: {nation.port_food})")
+    def start_shipyard(self):
+        self.gold -= Rules.SHIPYARD_COST
+        self.shipyard_started = True
 
-        # Calculate upkeep for each ship's crew
-        total_upkeep = 0
-        rate_per_10 = (
-            Rules.BLOCKADED_CREW_UPKEEP_PER_10 if nation.is_blockaded else Rules.CREW_UPKEEP_PER_10
+    def unlock_fire_ships(self):
+        self.gold -= Rules.FIRE_SHIP_UPGRADE_COST
+        self.fire_ships_unlocked = True
+
+    def destroy_shipyard(self):
+        self.shipyard_started = False
+        self.shipyard_completed = False
+        self.shipyard_labor = 0
+
+    def add_shipyard_labor(self, labor):
+        if not self.shipyard_started or self.shipyard_completed or labor <= 0:
+            return 0
+
+        remaining_labor = Rules.SHIPYARD_LABOR_REQUIRED - self.shipyard_labor
+        applied_labor = min(labor, remaining_labor)
+        self.shipyard_labor += applied_labor
+
+        if self.shipyard_labor >= Rules.SHIPYARD_LABOR_REQUIRED:
+            self.shipyard_completed = True
+
+        return applied_labor
+
+    @property
+    def ship_cost(self):
+        if self.shipyard_completed:
+            return Rules.SHIP_COST - Rules.SHIPYARD_DISCOUNT
+        return Rules.SHIP_COST
+
+    @property
+    def ship_value(self):
+        return self.ships * Rules.SHIP_COST
+
+    @property
+    def shipyard_value(self):
+        if self.shipyard_completed:
+            return Rules.SHIPYARD_ASSET_VALUE
+        return 0
+
+    @property
+    def asset_score(self):
+        return self.gold + self.ship_value + self.shipyard_value
+
+    @property
+    def has_treasure_at_sea(self):
+        return self.treasure_turns_remaining > 0
+
+    @property
+    def has_payroll_at_sea(self):
+        return self.payroll_turns_remaining > 0
+
+    @property
+    def treasure_status(self):
+        if self.has_treasure_at_sea:
+            return f" at sea, arrives in {self.treasure_turns_remaining} turn(s)"
+        return " ready"
+
+    @property
+    def payroll_status(self):
+        if self.has_payroll_at_sea:
+            return (
+                f"{self.payroll_value} gold at sea, arrives in "
+                f"{self.payroll_turns_remaining} turn(s)"
+            )
+        if self.payroll_launched:
+            return "completed"
+        start_month = Rules.MONTHS[Rules.PAYROLL_START_TURN - 1]
+        final_month = Rules.MONTHS[Rules.PAYROLL_FINAL_TURN - 1]
+        return f"must launch between {start_month}-{final_month}"
+
+    @property
+    def shipyard_status(self):
+        if self.shipyard_completed:
+            return f"completed, ships cost {self.ship_cost} gold"
+        if self.shipyard_started:
+            return (
+                f"under construction, {self.shipyard_labor}/"
+                f"{Rules.SHIPYARD_LABOR_REQUIRED} labor"
+            )
+        return (
+            f"not started ({Rules.SHIPYARD_COST} gold, "
+            f"{Rules.SHIPYARD_LABOR_REQUIRED} labor)"
         )
 
-        for ship in nation.ships:
-            crew_blocks = ship.crew // 10
-            cost = crew_blocks * rate_per_10
-            total_upkeep += cost
-            print(f" - Ship {ship.id} with {ship.crew} crew: {cost} gold upkeep")
+    @property
+    def fire_ship_status(self):
+        if self.fire_ships_unlocked:
+            return "available"
+        return f"locked ({Rules.FIRE_SHIP_UPGRADE_COST} gold upgrade)"
 
-        print(f" - Total upkeep: {total_upkeep}")
+    def launch_treasure(self):
+        self.treasure_turns_remaining = Rules.TREASURE_TRAVEL_TURNS
 
-        if nation.gold >= total_upkeep:
-            nation.gold -= total_upkeep
-        else:
-            print(f" ⚠️ Not enough gold to pay full crew upkeep!")
-            nation.gold = 0  # Or implement consequences for shortfall
+    def complete_treasure(self):
+        payout = self.treasure_value
+        self.gold += payout
+        self.treasure_value = Rules.TREASURE_BASE_VALUE
+        self.treasure_turns_remaining = 0
+        return payout
 
-        print(f" => {nation.name} now has {nation.gold} gold and {nation.port_food:.1f} food left.")
+    def capture_treasure(self):
+        payout = self.treasure_value
+        self.treasure_value = Rules.TREASURE_BASE_VALUE
+        self.treasure_turns_remaining = 0
+        return payout
 
+    def launch_payroll(self):
+        self.payroll_launched = True
+        self.payroll_value = self.ships * Rules.PAYROLL_VALUE_PER_SHIP
+        self.payroll_turns_remaining = Rules.PAYROLL_TRAVEL_TURNS
 
+    def complete_payroll(self):
+        payout = self.payroll_value
+        self.payroll_value = 0
+        self.payroll_turns_remaining = 0
+        return payout
+
+    def capture_payroll(self):
+        payout = self.payroll_value
+        self.payroll_value = 0
+        self.payroll_turns_remaining = 0
+        mutiny_losses = self.calculate_mutiny_losses()
+        self.ships -= mutiny_losses
+        return payout, mutiny_losses
+
+    def calculate_mutiny_losses(self):
+        if self.ships == 0:
+            return 0
+        return max(1, int(self.ships * Rules.PAYROLL_MUTINY_PERCENT + 0.999))
 
 
 class Game:
-    def __init__(self, nation_names):
-        self.nations = [Nation(name) for name in nation_names]
+    def __init__(self, player_names):
+        if len(player_names) != 2:
+            raise ValueError("Sealed Orders MVP requires exactly two players.")
+
+        self.players = [Nation(name) for name in player_names]
         self.turn = 1
+        self.port_labor = {}
+        self.game_over = False
+        self.port_destroyer = None
+        self.port_destroyed = None
 
-    def show_economy(self):
-        print(f"\n=== GAME STATE: TURN {self.turn} ===")
-        for nation in self.nations:
-            nation.status_report()
+    def play(self):
+        print(f"\n=== SEALED ORDERS v{Rules.VERSION} ===")
+        print("Assign ships to Trade, Raid, Guard, and Fire.")
+        print("Highest total assets after 12 months wins: gold + ship value.")
+        print("Treasure convoys can be launched for a delayed payout.")
+        print("Payroll must launch once between May-August, or it launches in August.")
+        print("Idle ships can build a shipyard that lowers future ship costs.")
+        print("Fire ships are unlocked with a buy-phase upgrade.")
 
-    def advance_turn(self):
-        print(f"\n🔄 ADVANCING TO TURN {self.turn}")
-        
-        # Upkeep phase
-        for nation in self.nations:
-            Upkeep.apply(nation)
+        while self.turn <= Rules.MAX_TURNS and not self.game_over:
+            self.play_turn()
+            self.turn += 1
 
-        # Elimination check for blockaded nations
-        for nation in self.nations[:]:  # copy to allow removal
-            if nation.blockade_turns >= Rules.MAX_BLOCKADE_TURNS:
-                print(f"\n💀 {nation.name} has been blockaded for {Rules.MAX_BLOCKADE_TURNS} turns and is eliminated!")
-                self.nations.remove(nation)
+        self.show_final_scores()
 
-        self.turn += 1
-        self.show_economy()
-    def resolve_blockades(self):
-        print("\n⚔️ RESOLVING BLOCKADES...")
-        blockades = {}
-        patrols = {}
+    def play_turn(self):
+        print(f"\n=== {self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS}) ===")
+        self.show_state()
 
-        # Collect orders
-        for nation in self.nations:
-            for ship in nation.ships:
-                order, target = ship.order if isinstance(ship.order, tuple) else (ship.order, None)
-                if order == ShipOrder.BLOCKADE:
-                    blockades.setdefault(target, []).append(ship)
-                elif order == ShipOrder.PATROL:
-                    patrols.setdefault(nation.name, []).append(ship)
+        for player in self.players:
+            self.pause_for_private_entry(player)
+            player.allocation = self.prompt_allocation(player)
 
-        for target_name, blockading_ships in blockades.items():
-            patrol_force = patrols.get(target_name, [])
-            blockading_crew = sum(ship.crew for ship in blockading_ships)
-            patrol_crew = sum(ship.crew for ship in patrol_force)
+        self.clear_between_players()
+        self.reveal_orders()
+        self.resolve_orders()
+        if self.game_over:
+            return
+        self.apply_shipyard_labor()
+        self.advance_convoys()
+        self.buy_phase()
 
-            print(f"\n🎯 Blockade Attempt on {target_name}:")
-            print(f" - Blockading crew: {blockading_crew}")
-            print(f" - Patrolling crew: {patrol_crew}")
+    def show_state(self):
+        print("\nPublic state:")
+        for player in self.players:
+            player.status_report()
 
-            target_nation = self.find_nation(target_name)
-            if not target_nation:
-                print(f" ❌ Error: Nation {target_name} not found!")
+    @property
+    def current_month(self):
+        return Rules.MONTHS[self.turn - 1]
+
+    def show_player_economy(self, player):
+        print(f"\n{player.name}'s economy - {self.current_month}")
+        player.status_report()
+        print(
+            f"  Asset score if game ended now: {player.asset_score} "
+            f"(shipyard value: {player.shipyard_value})"
+        )
+        print(
+            f"  Trade income: {Rules.TRADE_INCOME} gold, "
+            f"smuggle income: {Rules.SMUGGLE_INCOME} gold"
+        )
+        print(
+            f"  Ship cost: {player.ship_cost} gold, "
+            f"ship value: {Rules.SHIP_COST} gold"
+        )
+
+    def pause_for_private_entry(self, player):
+        self.clear_between_players()
+        input(f"{player.name}, press Enter when you are ready to enter sealed orders...")
+        self.show_player_economy(player)
+
+    def prompt_allocation(self, player):
+        while True:
+            print(f"\n{player.name}, assign up to {player.ships} ships.")
+            trade = self.prompt_non_negative_int("Trade ships: ")
+            raid = self.prompt_non_negative_int("Raid ships: ")
+            guard = self.prompt_non_negative_int("Guard ships: ")
+            fire = 0
+            if player.fire_ships_unlocked:
+                fire = self.prompt_non_negative_int("Fire ships: ")
+            else:
+                print("Fire ships: locked")
+            allocation = Allocation(trade, raid, guard, fire)
+
+            if allocation.total <= player.ships:
+                return allocation
+
+            print(
+                f"Invalid allocation: assigned {allocation.total} ships, "
+                f"but only {player.ships} are available."
+            )
+
+    def prompt_non_negative_int(self, prompt):
+        while True:
+            raw_value = input(prompt).strip()
+            try:
+                value = int(raw_value)
+            except ValueError:
+                print("Please enter a whole number.")
                 continue
 
-            if patrol_crew >= 3 * blockading_crew:
-                print(" 💥 Patrol force overwhelms the blockade! Blockading ship(s) are sunk.")
-                # Remove blockading ships from their owner's list
-                for ship in blockading_ships:
-                    owner = ship.owner
-                    owner.ships = [s for s in owner.ships if s != ship]
-                    print(f"   - Ship {ship.id} sunk.")
-                target_nation.is_blockaded = False
-                target_nation.blockade_turns = 0  # optional: reset counter
-            elif patrol_crew >= blockading_crew:
-                print(" ✅ Blockade repelled by patrol.")
-                target_nation.is_blockaded = False
-                target_nation.blockade_turns = 0
-            else:
-                print(" ❌ Blockade succeeds.")
-                target_nation.is_blockaded = True
-                target_nation.blockade_turns += 1
-                print(f" - {target_name} has been blockaded for {target_nation.blockade_turns} turn(s)")
+            if value < 0:
+                print("Please enter zero or a positive number.")
+                continue
 
+            return value
 
-    def resolve_trades(self):
-        print("\n💰 RESOLVING TRADE MISSIONS...")
-        for nation in self.nations:
-            for ship in nation.ships:
-                order, _ = ship.order if isinstance(ship.order, tuple) else (ship.order, None)
-                if order == ShipOrder.TRADE:
-                    tier = ship.trade_tier
-                    min_return, max_return = Rules.TRADE_RETURN_RANGES[tier]
-                    profit = random.randint(min_return, max_return)
-                    nation.gold += profit
-                    print(f" - {nation.name}'s Ship {ship.id} completed trade mission (Tier {tier}) and earned {profit} gold.")
+    def clear_between_players(self):
+        print("\n" * 40)
 
-
-    def find_nation(self, name):
-        for nation in self.nations:
-            if nation.name == name:
-                return nation
-        return None
     def reveal_orders(self):
-        print("\n📜 REVEALING SEALED ORDERS")
-        for nation in self.nations:
-            print(f"\n{nation.name.upper()}'s SHIPS:")
-            for ship in nation.ships:
-                order, target = ship.order if isinstance(ship.order, tuple) else (ship.order, None)
-                if order == ShipOrder.BLOCKADE or order == ShipOrder.ATTACK:
-                    print(f" - Ship {ship.id} will {order} {target}")
+        print("\n=== REVEALING SEALED ORDERS ===")
+        for player in self.players:
+            print(f"{player.name}: {player.allocation}")
+
+    def resolve_orders(self):
+        print("\n=== RESOLUTION ===")
+        player_one, player_two = self.players
+        self.port_labor = {
+            player: max(0, player.ships - player.allocation.total)
+            for player in self.players
+        }
+
+        self.resolve_fire_ships(attacker=player_one, defender=player_two)
+        self.resolve_fire_ships(attacker=player_two, defender=player_one)
+        self.resolve_raid_guard_battle(raider=player_one, guarder=player_two)
+        self.resolve_raid_guard_battle(raider=player_two, guarder=player_one)
+
+        if self.resolve_port_destruction(attacker=player_one, defender=player_two):
+            return
+        if self.resolve_port_destruction(attacker=player_two, defender=player_one):
+            return
+
+        result_one = self.resolve_income(trader=player_one, opponent=player_two)
+        result_two = self.resolve_income(trader=player_two, opponent=player_one)
+
+        player_one_income = result_one.trade_income + result_two.stolen_income
+        player_two_income = result_two.trade_income + result_one.stolen_income
+
+        player_one.gold += player_one_income
+        player_two.gold += player_two_income
+
+        print(
+            f"\n{player_one.name} earns {player_one_income} gold total "
+            f"({result_one.trade_income} trade, {result_two.stolen_income} stolen)."
+        )
+        print(
+            f"{player_two.name} earns {player_two_income} gold total "
+            f"({result_two.trade_income} trade, {result_one.stolen_income} stolen)."
+        )
+
+    def resolve_fire_ships(self, attacker, defender):
+        fire_strength = attacker.allocation.fire
+        guard_strength = defender.allocation.guard
+
+        print(f"\n{attacker.name}'s fire ships approach {defender.name}'s guards:")
+
+        if fire_strength == 0:
+            print(" - No fire ships launched.")
+            return
+
+        burned_guards = min(fire_strength, guard_strength)
+        shipyard_attack = 0
+
+        attacker.allocation.fire -= burned_guards
+        defender.allocation.guard -= burned_guards
+        attacker.ships -= burned_guards
+        defender.ships -= burned_guards
+
+        if burned_guards:
+            print(
+                f" - {burned_guards} fire ship(s) burn "
+                f"{burned_guards} guard ship(s)."
+            )
+            print(f" - {attacker.name} loses {burned_guards} fire ship(s).")
+
+        if attacker.allocation.fire > 0 and defender.shipyard_started:
+            shipyard_attack = 1
+            attacker.allocation.fire -= shipyard_attack
+            attacker.ships -= shipyard_attack
+            defender.destroy_shipyard()
+            print(
+                f" - 1 fire ship reaches port and destroys "
+                f"{defender.name}'s shipyard."
+            )
+            print(f" - {attacker.name} loses 1 fire ship.")
+
+        if burned_guards == 0 and shipyard_attack == 0:
+            print(" - No guards or shipyard are in position. The fire ships withdraw.")
+
+    def resolve_raid_guard_battle(self, raider, guarder):
+        raid_strength = raider.allocation.raid
+        guard_strength = guarder.allocation.guard
+        engaged_ships = min(raid_strength, guard_strength)
+
+        print(f"\n{raider.name}'s raiders meet {guarder.name}'s guards:")
+
+        if raid_strength == 0 or guard_strength == 0:
+            print(" - No battle.")
+            return
+
+        raider_losses = 0
+        guarder_losses = 0
+
+        if raid_strength > guard_strength:
+            guarder_losses = self.calculate_overwhelming_losses(
+                stronger=raid_strength,
+                weaker=guard_strength,
+                engaged_ships=engaged_ships,
+            )
+        elif guard_strength > raid_strength:
+            raider_losses = self.calculate_overwhelming_losses(
+                stronger=guard_strength,
+                weaker=raid_strength,
+                engaged_ships=engaged_ships,
+            )
+        elif raid_strength >= 2:
+            raider_losses = 1
+            guarder_losses = 1
+
+        raider.allocation.raid -= engaged_ships
+        guarder.allocation.guard -= engaged_ships
+        raider.ships -= raider_losses
+        guarder.ships -= guarder_losses
+
+        if raider_losses == 0 and guarder_losses == 0:
+            print(" - Even light forces disengage. No ships sink or reach trade.")
+            return
+
+        if raider_losses:
+            print(f" - {raider.name} loses {raider_losses} raid ship(s).")
+        if guarder_losses:
+            print(f" - {guarder.name} loses {guarder_losses} guard ship(s).")
+
+    def calculate_overwhelming_losses(self, stronger, weaker, engaged_ships):
+        if stronger >= weaker * 2:
+            return engaged_ships
+        if stronger * 2 >= weaker * 3:
+            return min(2, engaged_ships)
+        return 1
+
+    def resolve_port_destruction(self, attacker, defender):
+        if defender.ships > 0:
+            return False
+
+        if attacker.allocation.raid < Rules.PORT_ATTACK_SHIPS_REQUIRED:
+            return False
+
+        self.game_over = True
+        self.port_destroyer = attacker
+        self.port_destroyed = defender
+        print(
+            f"\n{attacker.name} sends {attacker.allocation.raid} raid ship(s) "
+            f"against {defender.name}'s undefended home port."
+        )
+        print(f"{defender.name}'s home port is destroyed.")
+        return True
+
+    def resolve_income(self, trader, opponent):
+        remaining_trade = trader.allocation.trade
+        active_raids = opponent.allocation.raid
+        stolen_income = 0
+
+        print(f"\n{trader.name}'s trade and convoys:")
+
+        if trader.has_treasure_at_sea and active_raids > 0:
+            treasure_stolen = trader.capture_treasure()
+            stolen_income += treasure_stolen
+            active_raids -= 1
+            print(
+                f" - Treasure convoy captured; {opponent.name} steals "
+                f"{treasure_stolen} gold."
+            )
+        elif trader.has_treasure_at_sea:
+            print(
+                f" - Treasure convoy worth {trader.treasure_value} gold "
+                f"evades raiders."
+            )
+
+        if trader.has_payroll_at_sea and active_raids > 0:
+            payroll_stolen, mutiny_losses = trader.capture_payroll()
+            stolen_income += payroll_stolen
+            active_raids -= 1
+            print(
+                f" - Payroll convoy captured; {opponent.name} steals "
+                f"{payroll_stolen} gold and {trader.name} loses "
+                f"{mutiny_losses} ship(s) to mutiny."
+            )
+        elif trader.has_payroll_at_sea:
+            print(
+                f" - Payroll convoy worth {trader.payroll_value} gold "
+                f"evades raiders."
+            )
+
+        raid_intercepts = min(active_raids, remaining_trade)
+        remaining_trade -= raid_intercepts
+        stolen_trade_income = raid_intercepts * Rules.TRADE_INCOME
+        stolen_income += stolen_trade_income
+
+        smuggled_trade = min(opponent.allocation.guard, remaining_trade)
+        remaining_trade -= smuggled_trade
+        smuggle_income = smuggled_trade * Rules.SMUGGLE_INCOME
+
+        normal_income = remaining_trade * Rules.TRADE_INCOME
+        trade_income = smuggle_income + normal_income
+        treasure_growth = int(trade_income * Rules.TREASURE_TRADE_PERCENT)
+
+        print(
+            f" - {raid_intercepts} trade ship(s) intercepted by raids; "
+            f"{opponent.name} steals {stolen_trade_income} gold."
+        )
+        print(
+            f" - {smuggled_trade} trade ship(s) smuggle past guards for "
+            f"{smuggle_income} gold."
+        )
+        print(
+            f" - {remaining_trade} trade ship(s) complete trade for "
+            f"{normal_income} gold."
+        )
+
+        if treasure_growth and not trader.has_treasure_at_sea:
+            trader.treasure_value += treasure_growth
+            print(f" - Treasure route grows by {treasure_growth} gold.")
+        elif treasure_growth:
+            print(" - Treasure route does not grow while its convoy is at sea.")
+
+        return ResolutionResult(
+            trade_income=trade_income,
+            stolen_income=stolen_income,
+            treasure_growth=treasure_growth,
+        )
+
+    def apply_shipyard_labor(self):
+        print("\n=== SHIPYARD LABOR ===")
+        any_labor = False
+
+        for player in self.players:
+            port_labor = self.port_labor.get(player, 0)
+            applied_labor = player.add_shipyard_labor(port_labor)
+            if applied_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {applied_labor} labor to the shipyard "
+                    f"({player.shipyard_labor}/{Rules.SHIPYARD_LABOR_REQUIRED})."
+                )
+                if player.shipyard_completed:
+                    print(
+                        f"{player.name}'s shipyard is complete. "
+                        f"Ships now cost {player.ship_cost} gold."
+                    )
+            elif player.shipyard_started and not player.shipyard_completed:
+                print(f"{player.name} has no idle ships to work on the shipyard.")
+
+        if not any_labor:
+            print("No shipyard labor is applied this turn.")
+
+    def advance_convoys(self):
+        print("\n=== CONVOY ARRIVALS ===")
+        any_convoys = False
+
+        for player in self.players:
+            if player.has_treasure_at_sea:
+                any_convoys = True
+                player.treasure_turns_remaining -= 1
+                if player.treasure_turns_remaining == 0:
+                    payout = player.complete_treasure()
+                    print(f"{player.name}'s treasure convoy arrives for {payout} gold.")
                 else:
-                    print(f" - Ship {ship.id} will {order}")
+                    print(
+                        f"{player.name}'s treasure convoy is "
+                        f"{player.treasure_turns_remaining} turn(s) from port."
+                    )
 
-# Reset game
-game = Game(["England", "Spain"])
-england = game.nations[0]
-spain = game.nations[1]
-england_ship = england.ships[0]
-spain_ship = spain.ships[0]
+            if player.has_payroll_at_sea:
+                any_convoys = True
+                player.payroll_turns_remaining -= 1
+                if player.payroll_turns_remaining == 0:
+                    payout = player.complete_payroll()
+                    print(
+                        f"{player.name}'s payroll convoy arrives safely "
+                        f"({payout} gold delivered)."
+                    )
+                else:
+                    print(
+                        f"{player.name}'s payroll convoy is "
+                        f"{player.payroll_turns_remaining} turn(s) from port."
+                    )
 
-game.show_economy()
+        if not any_convoys:
+            print("No convoys arrive this turn.")
 
-# Simulate 5 turns
-for i in range(5):
-    print(f"\n--- TURN {game.turn} ---")
+    def buy_phase(self):
+        print("\n=== BUY PHASE ===")
+        for player in self.players:
+            self.show_player_economy(player)
+            self.prompt_shipyard_start(player)
+            self.prompt_fire_ship_upgrade(player)
+            affordable = player.gold // player.ship_cost
 
-    # England blockades Spain every turn
-    england.assign_orders({
-        england_ship.id: (ShipOrder.BLOCKADE, "Spain")
-    })
+            while True:
+                amount = self.prompt_non_negative_int(
+                    f"{player.name}, buy ships for {player.ship_cost} gold each "
+                    f"(affordable: {affordable}): "
+                )
 
-    if i < 4:
-        # Spain trades (Tier 10)
-        spain.assign_orders({
-            spain_ship.id: (ShipOrder.TRADE, 10)
-        })
-    else:
-        # Turn 5: Spain buys crew and patrols
-        spain.buy_crew(spain_ship, 20)  # buys +20 crew → 30 total
-        spain.assign_orders({
-            spain_ship.id: (ShipOrder.PATROL, None)
-        })
+                if amount <= affordable:
+                    player.buy_ships(amount)
+                    if amount:
+                        print(f"{player.name} buys {amount} ship(s).")
+                    else:
+                        print(f"{player.name} buys no ships.")
+                    break
 
-    game.reveal_orders()
-    game.resolve_blockades()
-    game.resolve_trades()
-    game.advance_turn()
+                print(f"{player.name} can only afford {affordable} ship(s).")
 
-    # Early end if England is eliminated (e.g., ship sunk)
-    if not england.ships:
-        print("\n☠️ England’s ship was sunk. Blockade lifted. Simulation complete.")
-        break
+            self.prompt_treasure_launch(player)
+            self.prompt_payroll_launch(player)
 
-    if not any(n.name == "Spain" for n in game.nations):
-        print("\n💀 Spain has been eliminated. Simulation complete.")
-        break
+        self.show_state()
+
+    def prompt_treasure_launch(self, player):
+        if player.has_treasure_at_sea:
+            print(f"{player.name}'s treasure convoy is already at sea.")
+            return
+
+        latest_launch_turn = Rules.MAX_TURNS - Rules.TREASURE_TRAVEL_TURNS
+        if self.turn > latest_launch_turn:
+            print(f"It is too late for {player.name} to launch a treasure convoy.")
+            return
+
+        if self.prompt_yes_no(
+            f"{player.name}, launch treasure convoy worth "
+            f"{player.treasure_value} gold? [y/N]: "
+        ):
+            player.launch_treasure()
+            print(
+                f"{player.name} launches a treasure convoy worth "
+                f"{player.treasure_value} gold."
+            )
+
+    def prompt_payroll_launch(self, player):
+        if player.payroll_launched:
+            return
+
+        if self.turn < Rules.PAYROLL_START_TURN:
+            return
+
+        if self.turn >= Rules.PAYROLL_FINAL_TURN:
+            player.launch_payroll()
+            print(
+                f"{player.name}'s payroll convoy launches automatically "
+                f"with {player.payroll_value} gold."
+            )
+            return
+
+        if self.prompt_yes_no(f"{player.name}, launch mandatory payroll convoy now? [y/N]: "):
+            player.launch_payroll()
+            print(
+                f"{player.name} launches payroll convoy with "
+                f"{player.payroll_value} gold."
+            )
+        else:
+            print(
+                f"{player.name} delays payroll. It must launch by "
+                f"{Rules.MONTHS[Rules.PAYROLL_FINAL_TURN - 1]}."
+            )
+
+    def prompt_shipyard_start(self, player):
+        if player.shipyard_started:
+            return
+
+        if player.gold < Rules.SHIPYARD_COST:
+            print(
+                f"{player.name} cannot afford to start a shipyard "
+                f"({Rules.SHIPYARD_COST} gold needed)."
+            )
+            return
+
+        if self.prompt_yes_no(
+            f"{player.name}, start shipyard for {Rules.SHIPYARD_COST} gold? [y/N]: "
+        ):
+            player.start_shipyard()
+            print(
+                f"{player.name} starts a shipyard. Idle ships will add labor "
+                f"on future turns."
+            )
+
+    def prompt_fire_ship_upgrade(self, player):
+        if player.fire_ships_unlocked:
+            return
+
+        if player.gold < Rules.FIRE_SHIP_UPGRADE_COST:
+            print(
+                f"{player.name} cannot afford fire ship plans "
+                f"({Rules.FIRE_SHIP_UPGRADE_COST} gold needed)."
+            )
+            return
+
+        if self.prompt_yes_no(
+            f"{player.name}, buy fire ship plans for "
+            f"{Rules.FIRE_SHIP_UPGRADE_COST} gold? [y/N]: "
+        ):
+            player.unlock_fire_ships()
+            print(f"{player.name} can assign fire ships starting next turn.")
+
+    def prompt_yes_no(self, prompt):
+        raw_value = input(prompt).strip().lower()
+        return raw_value in {"y", "yes"}
+
+    def show_final_scores(self):
+        print("\n=== FINAL SCORES ===")
+        for player in self.players:
+            print(
+                f"{player.name}: {player.gold} gold + "
+                f"{player.ships} ships ({player.ship_value} value) + "
+                f"shipyard ({player.shipyard_value} value) = "
+                f"{player.asset_score} total assets"
+            )
+
+        player_one, player_two = self.players
+        if self.port_destroyer is not None:
+            print(
+                f"\n{self.port_destroyer.name} wins by destroying "
+                f"{self.port_destroyed.name}'s home port!"
+            )
+            return
+
+        if player_one.asset_score > player_two.asset_score:
+            print(f"\n{player_one.name} wins!")
+        elif player_two.asset_score > player_one.asset_score:
+            print(f"\n{player_two.name} wins!")
+        else:
+            print("\nThe game ends in a draw.")
+
+
+def prompt_player_names():
+    names = []
+    defaults = ["England", "Spain"]
+
+    print("Enter player names, or press Enter to use the default names.")
+    for index, default in enumerate(defaults, start=1):
+        name = input(f"Player {index} name [{default}]: ").strip()
+        names.append(name or default)
+
+    return names
+
+
+if __name__ == "__main__":
+    game = Game(prompt_player_names())
+    game.play()
