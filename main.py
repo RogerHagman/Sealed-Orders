@@ -5,6 +5,9 @@ import sys
 
 class UI:
     enabled = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    readable_reset = "\033[22;37m"
+    readable_text = "\033[37m"
+    terminal_prepared = False
     colors = {
         "blue": "34",
         "cyan": "36",
@@ -15,6 +18,12 @@ class UI:
         "white": "37",
         "yellow": "33",
     }
+
+    @classmethod
+    def prepare_terminal(cls):
+        if cls.enabled and not cls.terminal_prepared:
+            print(cls.readable_text, end="")
+            cls.terminal_prepared = True
 
     @classmethod
     def paint(cls, text, color=None, bold=False):
@@ -28,7 +37,7 @@ class UI:
             codes.append(cls.colors[color])
         if not codes:
             return text
-        return f"\033[{';'.join(codes)}m{text}\033[0m"
+        return f"\033[{';'.join(codes)}m{text}{cls.readable_reset}"
 
     @classmethod
     def section(cls, title, color="cyan"):
@@ -70,7 +79,7 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.31"
+    VERSION = "0.32"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -96,6 +105,11 @@ class Rules:
     TRADE_GUILD_LABOR_REQUIRED = 4
     TRADE_GUILD_ASSET_VALUE = 8
     TRADE_GUILD_BONUS_STEP = 3
+    FISHING_DOCK_COST = 3
+    FISHING_DOCK_ASSET_VALUE = 3
+    FISHING_BOAT_COST = 2
+    FISHING_BOAT_INCOME = 1
+    FISHING_BOAT_ASSET_VALUE = 2
     MAX_TURNS = 12
     MONTHS = [
         "January",
@@ -145,11 +159,13 @@ class ResolutionResult:
     def __init__(
         self,
         trade_income=0,
+        fishing_income=0,
         stolen_income=0,
         confiscated_income=0,
         treasure_growth=0,
     ):
         self.trade_income = trade_income
+        self.fishing_income = fishing_income
         self.stolen_income = stolen_income
         self.confiscated_income = confiscated_income
         self.treasure_growth = treasure_growth
@@ -178,6 +194,9 @@ class Nation:
         self.trade_guild_labor = 0
         self.fire_ships_unlocked = False
         self.guard_captains = 0
+        self.fishing_dock_built = False
+        self.fishing_dock_disabled = False
+        self.fishing_boats = 0
 
     def status_report(self):
         print(
@@ -194,6 +213,7 @@ class Nation:
         print(f"  {UI.field('Shipyard')} {self.shipyard_status}")
         print(f"  {UI.field('Fort')} {self.fort_status}")
         print(f"  {UI.field('Trade guild')} {self.trade_guild_status}")
+        print(f"  {UI.field('Fishing')} {self.fishing_status}")
         print(f"  {UI.field('Fire ships')} {self.fire_ship_status}")
         print(f"  {UI.field('Guard captains')} {self.guard_captain_status}")
 
@@ -222,6 +242,15 @@ class Nation:
         self.gold -= Rules.GUARD_CAPTAIN_COST
         self.guard_captains += 1
 
+    def build_or_repair_fishing_dock(self):
+        self.gold -= Rules.FISHING_DOCK_COST
+        self.fishing_dock_built = True
+        self.fishing_dock_disabled = False
+
+    def buy_fishing_boats(self, amount):
+        self.gold -= amount * Rules.FISHING_BOAT_COST
+        self.fishing_boats += amount
+
     def start_fort(self):
         self.gold -= Rules.FORT_COST
         self.fort_started = True
@@ -234,6 +263,12 @@ class Nation:
         self.shipyard_started = False
         self.shipyard_completed = False
         self.shipyard_labor = 0
+
+    def disable_fishing_dock(self):
+        if not self.fishing_dock_built or self.fishing_dock_disabled:
+            return False
+        self.fishing_dock_disabled = True
+        return True
 
     def add_shipyard_labor(self, labor):
         if not self.shipyard_started or self.shipyard_completed or labor <= 0:
@@ -316,6 +351,22 @@ class Nation:
         return 0
 
     @property
+    def fishing_dock_value(self):
+        if self.fishing_dock_built and not self.fishing_dock_disabled:
+            return Rules.FISHING_DOCK_ASSET_VALUE
+        return 0
+
+    @property
+    def fishing_boat_value(self):
+        return self.fishing_boats * Rules.FISHING_BOAT_ASSET_VALUE
+
+    @property
+    def fishing_income(self):
+        if self.fishing_dock_built and not self.fishing_dock_disabled:
+            return self.fishing_boats * Rules.FISHING_BOAT_INCOME
+        return 0
+
+    @property
     def guard_captain_port_defense(self):
         if self.fort_completed:
             return self.guard_captains * Rules.GUARD_CAPTAIN_PORT_DEFENSE
@@ -329,6 +380,8 @@ class Nation:
             + self.shipyard_value
             + self.fort_value
             + self.trade_guild_value
+            + self.fishing_dock_value
+            + self.fishing_boat_value
         )
 
     @property
@@ -404,6 +457,20 @@ class Nation:
         return (
             f"not started ({Rules.TRADE_GUILD_COST} gold, "
             f"{Rules.TRADE_GUILD_LABOR_REQUIRED} labor)"
+        )
+
+    @property
+    def fishing_status(self):
+        if not self.fishing_dock_built:
+            return f"no docks ({Rules.FISHING_DOCK_COST} gold), 0 boats"
+        if self.fishing_dock_disabled:
+            return (
+                f"docks disabled ({Rules.FISHING_DOCK_COST} gold repair), "
+                f"{self.fishing_boats} boat(s), 0 income"
+            )
+        return (
+            f"docks active, {self.fishing_boats} boat(s), "
+            f"+{self.fishing_income} gold/turn"
         )
 
     @property
@@ -539,6 +606,7 @@ class Game:
             "shipyard_status": player.shipyard_status,
             "fort_status": player.fort_status,
             "trade_guild_status": player.trade_guild_status,
+            "fishing_status": player.fishing_status,
             "fire_ship_status": player.fire_ship_status,
             "guard_captain_status": player.guard_captain_status,
             "allocation": Allocation(
@@ -568,6 +636,7 @@ class Game:
             self.print_status_change("Shipyard", before, after, "shipyard_status")
             self.print_status_change("Fort", before, after, "fort_status")
             self.print_status_change("Trade guild", before, after, "trade_guild_status")
+            self.print_status_change("Fishing", before, after, "fishing_status")
             self.print_status_change("Fire ships", before, after, "fire_ship_status")
             self.print_status_change(
                 "Guard captains",
@@ -604,11 +673,15 @@ class Game:
         print(
             f"  {UI.field('Economy')} Trade income: {Rules.TRADE_INCOME} gold, "
             f"smuggle income: {Rules.SMUGGLE_INCOME} gold, "
-            f"guard captain cost: {Rules.GUARD_CAPTAIN_COST} gold"
+            f"fishing boat income: {Rules.FISHING_BOAT_INCOME} gold"
         )
         print(
             f"  {UI.field('Ships')} Cost: {player.ship_cost} gold, "
             f"ship value: {Rules.SHIP_COST} gold"
+        )
+        print(
+            f"  {UI.field('Fishing')} Docks: {Rules.FISHING_DOCK_COST} gold, "
+            f"boats: {Rules.FISHING_BOAT_COST} gold each"
         )
         if not player.payroll_launched:
             print(f"  {UI.field('Payroll cost')} {player.payroll_cost} gold")
@@ -693,11 +766,13 @@ class Game:
 
         player_one_income = (
             result_one.trade_income
+            + result_one.fishing_income
             + result_two.stolen_income
             + result_two.confiscated_income
         )
         player_two_income = (
             result_two.trade_income
+            + result_two.fishing_income
             + result_one.stolen_income
             + result_one.confiscated_income
         )
@@ -707,12 +782,14 @@ class Game:
 
         print(
             f"\n{player_one.name} earns {player_one_income} gold total "
-            f"({result_one.trade_income} trade, {result_two.stolen_income} stolen, "
+            f"({result_one.trade_income} trade, {result_one.fishing_income} fishing, "
+            f"{result_two.stolen_income} stolen, "
             f"{result_two.confiscated_income} confiscated)."
         )
         print(
             f"{player_two.name} earns {player_two_income} gold total "
-            f"({result_two.trade_income} trade, {result_one.stolen_income} stolen, "
+            f"({result_two.trade_income} trade, {result_two.fishing_income} fishing, "
+            f"{result_one.stolen_income} stolen, "
             f"{result_one.confiscated_income} confiscated)."
         )
 
@@ -728,6 +805,7 @@ class Game:
 
         burned_guards = min(fire_strength, guard_strength)
         shipyard_attack = 0
+        fishing_dock_attack = 0
         blocked_fire = 0
 
         attacker.allocation.fire -= burned_guards
@@ -742,7 +820,16 @@ class Game:
             )
             print(f" - {attacker.name} loses {burned_guards} fire ship(s).")
 
-        if attacker.allocation.fire > 0 and defender.shipyard_started:
+        if (
+            attacker.allocation.fire > 0
+            and (
+                defender.shipyard_started
+                or (
+                    defender.fishing_dock_built
+                    and not defender.fishing_dock_disabled
+                )
+            )
+        ):
             if defender.block_shipyard_fire():
                 blocked_fire = 1
                 attacker.allocation.fire -= blocked_fire
@@ -764,8 +851,31 @@ class Game:
             )
             print(f" - {attacker.name} loses 1 fire ship.")
 
-        if burned_guards == 0 and shipyard_attack == 0 and blocked_fire == 0:
-            print(" - No guards or shipyard are in position. The fire ships withdraw.")
+        if (
+            attacker.allocation.fire > 0
+            and defender.fishing_dock_built
+            and not defender.fishing_dock_disabled
+        ):
+            fishing_dock_attack = 1
+            attacker.allocation.fire -= fishing_dock_attack
+            attacker.ships -= fishing_dock_attack
+            defender.disable_fishing_dock()
+            print(
+                f" - 1 fire ship burns {defender.name}'s fishing docks. "
+                "Fishing boats survive, but income stops until repairs."
+            )
+            print(f" - {attacker.name} loses 1 fire ship.")
+
+        if (
+            burned_guards == 0
+            and shipyard_attack == 0
+            and fishing_dock_attack == 0
+            and blocked_fire == 0
+        ):
+            print(
+                " - No guards, shipyard, or active fishing docks are in position. "
+                "The fire ships withdraw."
+            )
 
     def resolve_raid_guard_battle(self, raider, guarder):
         raid_strength = raider.allocation.raid
@@ -896,6 +1006,7 @@ class Game:
 
         normal_income = remaining_trade * Rules.TRADE_INCOME
         trade_bonus = self.calculate_trade_guild_bonus(trader, remaining_trade)
+        fishing_income = trader.fishing_income
         trade_income = smuggle_income + normal_income + trade_bonus
         treasure_growth = int(trade_income * Rules.TREASURE_TRADE_PERCENT)
 
@@ -918,6 +1029,12 @@ class Game:
         )
         if trade_bonus:
             print(f" - Trade guild bonus adds {trade_bonus} gold.")
+        if fishing_income:
+            print(
+                f" - Fishing boats bring in {fishing_income} domestic gold."
+            )
+        elif trader.fishing_boats and trader.fishing_dock_disabled:
+            print(" - Fishing boats are idle while the docks are disabled.")
 
         if treasure_growth and not trader.has_treasure_at_sea:
             trader.treasure_value += treasure_growth
@@ -927,6 +1044,7 @@ class Game:
 
         return ResolutionResult(
             trade_income=trade_income,
+            fishing_income=fishing_income,
             stolen_income=stolen_income,
             confiscated_income=confiscated_income,
             treasure_growth=treasure_growth,
@@ -1111,24 +1229,36 @@ class Game:
             ),
             (
                 "5",
+                "Build/repair fishing docks",
+                self.fishing_dock_action,
+                self.fishing_dock_disabled_reason(player),
+            ),
+            (
+                "6",
+                "Buy fishing boats",
+                self.buy_fishing_boats_action,
+                self.buy_fishing_boats_disabled_reason(player),
+            ),
+            (
+                "7",
                 "Hire guard captain",
                 self.hire_guard_captain_action,
                 self.guard_captain_disabled_reason(player),
             ),
             (
-                "6",
+                "8",
                 "Buy fire ship plans",
                 self.buy_fire_ship_plans_action,
                 self.fire_ship_plans_disabled_reason(player),
             ),
             (
-                "7",
+                "9",
                 "Launch treasure convoy",
                 self.launch_treasure_action,
                 self.treasure_launch_disabled_reason(player),
             ),
             (
-                "8",
+                "10",
                 "Launch payroll convoy",
                 self.launch_payroll_action,
                 self.payroll_launch_disabled_reason(player),
@@ -1179,6 +1309,22 @@ class Game:
             return "maximum hired"
         if player.gold < Rules.GUARD_CAPTAIN_COST:
             return f"too expensive ({Rules.GUARD_CAPTAIN_COST} gold needed)"
+        return None
+
+    def fishing_dock_disabled_reason(self, player):
+        if player.fishing_dock_built and not player.fishing_dock_disabled:
+            return "already active"
+        if player.gold < Rules.FISHING_DOCK_COST:
+            return f"too expensive ({Rules.FISHING_DOCK_COST} gold needed)"
+        return None
+
+    def buy_fishing_boats_disabled_reason(self, player):
+        if not player.fishing_dock_built:
+            return "requires fishing docks"
+        if player.fishing_dock_disabled:
+            return "repair fishing docks first"
+        if player.gold < Rules.FISHING_BOAT_COST:
+            return f"too expensive ({Rules.FISHING_BOAT_COST} gold needed)"
         return None
 
     def treasure_launch_disabled_reason(self, player):
@@ -1254,6 +1400,41 @@ class Game:
             f"({player.guard_captains}/{Rules.GUARD_CAPTAIN_MAX})."
         ))
 
+    def fishing_dock_action(self, player):
+        was_disabled = player.fishing_dock_disabled
+        player.build_or_repair_fishing_dock()
+        if was_disabled:
+            print(UI.success(f"{player.name} repairs the fishing docks."))
+        else:
+            print(UI.success(
+                f"{player.name} builds fishing docks. "
+                "Fishing boats can now be bought."
+            ))
+
+    def buy_fishing_boats_action(self, player):
+        affordable = player.gold // Rules.FISHING_BOAT_COST
+
+        while True:
+            amount = self.prompt_non_negative_int(
+                f"{player.name}, buy fishing boats for "
+                f"{Rules.FISHING_BOAT_COST} gold each "
+                f"(affordable: {affordable}): "
+            )
+
+            if amount <= affordable:
+                player.buy_fishing_boats(amount)
+                if amount:
+                    print(UI.success(
+                        f"{player.name} buys {amount} fishing boat(s)."
+                    ))
+                else:
+                    print(f"{player.name} buys no fishing boats.")
+                return
+
+            print(UI.warning(
+                f"{player.name} can only afford {affordable} fishing boat(s)."
+            ))
+
     def launch_treasure_action(self, player):
         player.launch_treasure()
         print(UI.success(
@@ -1292,6 +1473,7 @@ class Game:
                 f"shipyard ({player.shipyard_value} value) + "
                 f"fort ({player.fort_value} value) + "
                 f"trade guild ({player.trade_guild_value} value) + "
+                f"fishing ({player.fishing_dock_value + player.fishing_boat_value} value) + "
                 f"guard captains ({player.guard_captains}) = "
                 f"{UI.paint(str(player.asset_score), 'yellow', bold=True)} total assets"
             )
@@ -1360,6 +1542,7 @@ def prompt_ai_strategy(strategy_names):
 
 
 if __name__ == "__main__":
+    UI.prepare_terminal()
     parser = argparse.ArgumentParser(description="Play or simulate Sealed Orders.")
     parser.add_argument(
         "--play-ai",

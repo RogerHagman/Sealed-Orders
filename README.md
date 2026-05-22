@@ -167,3 +167,30 @@
 - Added terminal color and cleaner section headers for the interactive game UI.
 - Reworked public state, economy, buy phase, turn summary, and final score presentation for easier scanning.
 - Color automatically stays off when output is redirected or `NO_COLOR` is set.
+
+## Version 0.32
+
+- Added fishing docks as a cheap domestic economy upgrade.
+- Fishing boats cost 2 gold each and produce 1 domestic gold per turn while docks are active.
+- Fishing boats are not assignable ships and do not defend the home port.
+- Fire ships can disable active fishing docks after shipyard targeting; boats survive but produce no income until the docks are repaired.
+- Evolving strategies now learn fishing dock and fishing boat buy biases.
+
+## Bot Meta Notes
+
+### Human Shadow
+
+- `Human Shadow` is a mirror of the current human game log, not an optimized benchmark bot.
+- The current profile is based on all 9 recorded human-vs-AI games in `ai_game_log.jsonl`.
+- Its order mix favors heavy trade, selective raids, meaningful guards, and almost no fire ships.
+- Its buy pattern favors frequent shipyard and trade guild play, with occasional forts and rare captains or fire plans.
+- Its first three turns are selected from an opening book mined from human-won games, then it falls back to weighted play.
+- After the opening, weighted bots adjust to balance of power: fleet gap, asset gap, income engine, port-kill threats, and fleet pressure.
+
+### The Red Tide
+
+- `The Red Tide` is a dominant exploit against the current bot population, not proof of a solved game.
+- Its benchmark strength comes from extreme early raid pressure against bots that fail to survive the first wave and punish a zero-defense fleet.
+- The strategy avoids early treasure launches because evolved play sees at-sea treasure as too vulnerable against raid-heavy bots.
+- It also underbuilds shipyards because immediate port pressure outperforms compounding economy against the current opponent roster.
+- The human counterexample in the log shows the pressure point: launch treasure early, guard through the first raids, start shipyard, let Red Tide run out of ships, then convert the economic lead into a port kill.
