@@ -70,3 +70,18 @@
 - Add `--seed 1` for repeatable results while tuning strategies or rules.
 - The report ranks bot archetypes by win rate, average turns, average assets, and port wins.
 - Bot strategy and tournament code lives in `bot_playtest.py`.
+
+## Version 0.16
+
+- Added human-vs-AI mode.
+- Run `python3 main.py --play-ai` to face the default Privateer AI.
+- Use `--ai-strategy Merchant`, `Privateer`, `Builder`, `Admiral`, or `Opportunist`.
+- Add `--seed 1` for repeatable AI choices while testing.
+
+## Version 0.17
+
+- Human-vs-AI games are recorded after completion.
+- Records are appended as JSON lines to `ai_game_log.jsonl` by default.
+- Use `--ai-log path/to/file.jsonl` to choose a different log file.
+- Each record includes the AI strategy, winner, final scores, and turn-by-turn orders.
+- Run `python3 main.py --ai-log-summary` to summarize recorded human-vs-AI results.

@@ -1,9 +1,14 @@
 import contextlib
 import io
+import json
 import random
 from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
 
 from main import Allocation, Game, Rules
+
+AI_GAME_LOG_PATH = Path("ai_game_log.jsonl")
 
 
 class BotStrategy:
@@ -210,6 +215,163 @@ class SelfPlayGame(Game):
         pass
 
 
+class PlayVsAIGame(Game):
+    def __init__(self, human_name, strategy, rng):
+        super().__init__([human_name, f"AI {strategy.name}"])
+        self.human = self.players[0]
+        self.ai = self.players[1]
+        self.strategy = strategy
+        self.rng = rng
+        self.turn_records = []
+
+    def play_turn(self):
+        print(f"\n=== {self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS}) ===")
+        self.show_state()
+        before_snapshot = self.snapshot_turn()
+
+        self.show_player_economy(self.human)
+        self.human.allocation = self.prompt_allocation(self.human)
+        print(f"\n{self.ai.name} writes sealed orders.")
+        self.ai.allocation = self.strategy.choose_allocation(
+            self, self.ai, self.human, self.rng
+        )
+
+        orders_snapshot = self.snapshot_turn()
+        self.reveal_orders()
+        self.resolve_orders()
+        if self.game_over:
+            after_snapshot = self.snapshot_turn()
+            self.record_turn(before_snapshot, orders_snapshot, after_snapshot)
+            return
+        self.pause_after_resolution()
+        self.apply_port_labor()
+        self.advance_convoys()
+        self.buy_phase()
+        after_snapshot = self.snapshot_turn()
+        self.record_turn(before_snapshot, orders_snapshot, after_snapshot)
+        self.show_turn_summary(before_snapshot, after_snapshot, orders_snapshot)
+
+    def buy_phase(self):
+        print("\n=== BUY PHASE ===")
+        self.run_buy_menu(self.human)
+        print(f"\n{self.ai.name} takes its buy phase.")
+        self.strategy.run_buy_phase(self, self.ai, self.human, self.rng)
+        print(f"{self.ai.name} finishes the buy phase.")
+        self.show_state()
+
+    def record_turn(self, before_snapshot, orders_snapshot, after_snapshot):
+        self.turn_records.append(
+            {
+                "turn": self.turn,
+                "month": self.current_month,
+                "before": snapshot_record(before_snapshot),
+                "orders": snapshot_record(orders_snapshot),
+                "after": snapshot_record(after_snapshot),
+            }
+        )
+
+
+def write_ai_game_record(game, strategy, seed, log_path=AI_GAME_LOG_PATH):
+    log_path = Path(log_path)
+    record = build_ai_game_record(game, strategy, seed)
+    if log_path.parent != Path("."):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(json.dumps(record, sort_keys=True))
+        log_file.write("\n")
+
+    print(f"\nAI game recorded in {log_path}.")
+
+
+def build_ai_game_record(game, strategy, seed):
+    human = game.human
+    ai = game.ai
+    winner = ai_game_winner(game)
+
+    return {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "rules_version": Rules.VERSION,
+        "ai_strategy": strategy.name,
+        "seed": seed,
+        "turns": min(game.turn, Rules.MAX_TURNS),
+        "win_type": ai_game_win_type(game),
+        "winner": winner,
+        "human_won": winner == "human",
+        "ai_won": winner == "ai",
+        "players": {
+            "human": player_record(human),
+            "ai": player_record(ai),
+        },
+        "turns_detail": game.turn_records,
+    }
+
+
+def ai_game_winner(game):
+    human = game.human
+    ai = game.ai
+
+    if game.port_destroyer is human:
+        return "human"
+    if game.port_destroyer is ai:
+        return "ai"
+    if human.asset_score > ai.asset_score:
+        return "human"
+    if ai.asset_score > human.asset_score:
+        return "ai"
+    return "draw"
+
+
+def ai_game_win_type(game):
+    if game.port_destroyer is not None:
+        return "port"
+    if game.human.asset_score == game.ai.asset_score:
+        return "draw"
+    return "assets"
+
+
+def player_record(player):
+    return {
+        "name": player.name,
+        "gold": player.gold,
+        "ships": player.ships,
+        "asset_score": player.asset_score,
+        "shipyard_started": player.shipyard_started,
+        "shipyard_completed": player.shipyard_completed,
+        "fort_started": player.fort_started,
+        "fort_completed": player.fort_completed,
+        "trade_guild_started": player.trade_guild_started,
+        "trade_guild_completed": player.trade_guild_completed,
+        "fire_ships_unlocked": player.fire_ships_unlocked,
+        "treasure_value": player.treasure_value,
+        "treasure_at_sea": player.has_treasure_at_sea,
+        "payroll_launched": player.payroll_launched,
+        "payroll_at_sea": player.has_payroll_at_sea,
+    }
+
+
+def snapshot_record(snapshot):
+    return {
+        player_name: {
+            key: value_record(value)
+            for key, value in player_snapshot.items()
+        }
+        for player_name, player_snapshot in snapshot.items()
+    }
+
+
+def value_record(value):
+    if isinstance(value, Allocation):
+        return {
+            "trade": value.trade,
+            "raid": value.raid,
+            "guard": value.guard,
+            "fire": value.fire,
+            "total": value.total,
+        }
+
+    return value
+
+
 def default_bot_strategies():
     return [
         BotStrategy(
@@ -263,6 +425,98 @@ def default_bot_strategies():
             ship_bias=0.9,
         ),
     ]
+
+
+def strategy_names():
+    return [strategy.name for strategy in default_bot_strategies()]
+
+
+def find_strategy(name):
+    normalized_name = name.strip().lower()
+    for strategy in default_bot_strategies():
+        if strategy.name.lower() == normalized_name:
+            return strategy
+
+    available = ", ".join(strategy_names())
+    raise ValueError(f"Unknown AI strategy '{name}'. Available strategies: {available}.")
+
+
+def play_vs_ai(
+    human_name="England",
+    strategy_name="Privateer",
+    seed=None,
+    log_path=AI_GAME_LOG_PATH,
+):
+    rng = random.Random(seed)
+    strategy = find_strategy(strategy_name)
+    game = PlayVsAIGame(human_name=human_name, strategy=strategy, rng=rng)
+    print(f"\nYou are facing AI {strategy.name}.")
+    game.play()
+    write_ai_game_record(game, strategy, seed, log_path=log_path)
+
+
+def summarize_ai_games(log_path=AI_GAME_LOG_PATH):
+    log_path = Path(log_path)
+    if not log_path.exists():
+        print(f"No AI game log found at {log_path}.")
+        return
+
+    stats = defaultdict(
+        lambda: {
+            "games": 0,
+            "human_wins": 0,
+            "ai_wins": 0,
+            "draws": 0,
+            "turns_total": 0,
+            "human_score_total": 0,
+            "ai_score_total": 0,
+        }
+    )
+
+    with log_path.open(encoding="utf-8") as log_file:
+        for line in log_file:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            row = stats[record["ai_strategy"]]
+            row["games"] += 1
+            row["turns_total"] += record["turns"]
+            row["human_score_total"] += record["players"]["human"]["asset_score"]
+            row["ai_score_total"] += record["players"]["ai"]["asset_score"]
+
+            if record["winner"] == "human":
+                row["human_wins"] += 1
+            elif record["winner"] == "ai":
+                row["ai_wins"] += 1
+            else:
+                row["draws"] += 1
+
+    print_ai_game_summary(log_path, stats)
+
+
+def print_ai_game_summary(log_path, stats):
+    print(f"\n=== HUMAN VS AI HISTORY: {log_path} ===")
+    print(
+        "\nAI strategy   Games  Human wins  AI wins  Draws  "
+        "Human win rate  Avg turns  Avg human  Avg AI"
+    )
+    print(
+        "------------  -----  ----------  -------  -----  "
+        "--------------  ---------  ---------  ------"
+    )
+
+    for strategy_name, row in sorted(stats.items()):
+        games = row["games"]
+        human_win_rate = row["human_wins"] / games if games else 0
+        avg_turns = row["turns_total"] / games if games else 0
+        avg_human_score = row["human_score_total"] / games if games else 0
+        avg_ai_score = row["ai_score_total"] / games if games else 0
+        print(
+            f"{strategy_name:<12}  {games:>5}  {row['human_wins']:>10}  "
+            f"{row['ai_wins']:>7}  {row['draws']:>5}  "
+            f"{human_win_rate * 100:>13.1f}%  {avg_turns:>9.1f}  "
+            f"{avg_human_score:>9.1f}  {avg_ai_score:>6.1f}"
+        )
 
 
 def run_self_play(games=100, seed=None):

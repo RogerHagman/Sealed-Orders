@@ -2,7 +2,7 @@ import argparse
 
 
 class Rules:
-    VERSION = "0.15"
+    VERSION = "0.17"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -1105,8 +1105,33 @@ def prompt_player_names():
     return names
 
 
+def prompt_human_name():
+    name = input("Your nation name [England]: ").strip()
+    return name or "England"
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Play or simulate Sealed Orders.")
+    parser.add_argument(
+        "--play-ai",
+        action="store_true",
+        help="play a human-vs-AI game",
+    )
+    parser.add_argument(
+        "--ai-strategy",
+        default="Privateer",
+        help="AI strategy for --play-ai (default: Privateer)",
+    )
+    parser.add_argument(
+        "--ai-log",
+        default="ai_game_log.jsonl",
+        help="where completed human-vs-AI games are recorded",
+    )
+    parser.add_argument(
+        "--ai-log-summary",
+        action="store_true",
+        help="summarize recorded human-vs-AI games",
+    )
     parser.add_argument(
         "--self-play",
         type=int,
@@ -1120,7 +1145,24 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.self_play is not None:
+    if args.ai_log_summary:
+        from bot_playtest import summarize_ai_games
+
+        summarize_ai_games(log_path=args.ai_log)
+    elif args.play_ai:
+        from bot_playtest import find_strategy, play_vs_ai
+
+        try:
+            find_strategy(args.ai_strategy)
+            play_vs_ai(
+                human_name=prompt_human_name(),
+                strategy_name=args.ai_strategy,
+                seed=args.seed,
+                log_path=args.ai_log,
+            )
+        except ValueError as error:
+            parser.error(str(error))
+    elif args.self_play is not None:
         from bot_playtest import run_self_play
 
         run_self_play(games=args.self_play, seed=args.seed)
