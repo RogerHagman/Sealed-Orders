@@ -24,6 +24,9 @@ BOT_WEIGHT_FIELDS = [
     "construction_idle_bias",
 ]
 BUILD_PROJECTS = ["shipyard", "fort", "trade_guild", "guard_captain", "fire_plans"]
+MIN_FLEET_FOR_PROJECTS = 3
+MIN_FLEET_FOR_CONVOYS = 2
+REBUILD_FLEET_TARGET = 4
 
 
 class BotStrategy:
@@ -77,13 +80,19 @@ class BotStrategy:
         if ships <= 0:
             return Allocation()
 
+        idle_ships = self.choose_idle_construction_labor(player, ships)
+        ships -= idle_ships
+
         weights = {
             "trade": self.trade_weight,
             "raid": self.raid_weight,
             "guard": self.guard_weight,
-            "fire": self.fire_weight if player.fire_ships_unlocked else 0,
+            "fire": self.fire_weight if self.should_consider_fire(player, opponent) else 0,
         }
 
+        if player.ships <= 2:
+            weights["guard"] += 1.5
+            weights["fire"] = 0
         if opponent.has_treasure_at_sea:
             weights["raid"] += 2.5
         if opponent.has_payroll_at_sea:
@@ -96,10 +105,6 @@ class BotStrategy:
             weights["raid"] += 1.5
         if opponent.shipyard_started:
             weights["fire"] += 1.5
-        if self.has_active_construction(player):
-            idle_cap = min(ships, max(1, int(ships * self.construction_idle_bias + 0.999)))
-            if idle_cap > 0:
-                ships = max(0, ships - rng.randint(0, idle_cap))
 
         allocation = {"trade": 0, "raid": 0, "guard": 0, "fire": 0}
         for _ in range(ships):
@@ -116,7 +121,11 @@ class BotStrategy:
     def run_buy_phase(self, game, player, opponent, rng):
         game.auto_launch_final_payroll(player)
 
+        self.rebuild_fleet(player, rng)
+
         for project in self.buy_project_order():
+            if not self.can_spend_on_project(player, project):
+                continue
             if project == "shipyard" and game.shipyard_disabled_reason(player) is None:
                 if rng.random() < self.shipyard_bias:
                     player.start_shipyard()
@@ -156,8 +165,31 @@ class BotStrategy:
             elif affordable > 1:
                 player.buy_ships(affordable - 1)
 
+    def rebuild_fleet(self, player, rng):
+        if player.ships >= MIN_FLEET_FOR_PROJECTS:
+            return
+
+        affordable = player.gold // player.ship_cost
+        if affordable <= 0:
+            return
+
+        needed = max(1, REBUILD_FLEET_TARGET - player.ships)
+        if rng.random() < self.ship_bias:
+            player.buy_ships(min(affordable, needed))
+
+    def can_spend_on_project(self, player, project):
+        if project == "guard_captain":
+            return player.ships >= MIN_FLEET_FOR_CONVOYS
+        if player.ships < MIN_FLEET_FOR_PROJECTS:
+            return False
+        if project in {"shipyard", "fort", "trade_guild"}:
+            return player.ships > 0
+        return True
+
     def should_launch_payroll(self, game, player, rng):
         if game.payroll_launch_disabled_reason(player) is not None:
+            return False
+        if player.ships < MIN_FLEET_FOR_CONVOYS:
             return False
 
         launch_score = self.convoy_bias
@@ -169,6 +201,8 @@ class BotStrategy:
 
     def should_launch_treasure(self, game, player, rng):
         if game.treasure_launch_disabled_reason(player) is not None:
+            return False
+        if player.ships < MIN_FLEET_FOR_CONVOYS:
             return False
 
         launch_score = self.convoy_bias
@@ -198,6 +232,22 @@ class BotStrategy:
                 player.trade_guild_started and not player.trade_guild_completed,
             ]
         )
+
+    def choose_idle_construction_labor(self, player, ships):
+        if not self.has_active_construction(player):
+            return 0
+
+        desired_idle = max(1, int(ships * self.construction_idle_bias + 0.999))
+        if player.ships <= MIN_FLEET_FOR_PROJECTS:
+            desired_idle = min(desired_idle, 1)
+        return min(ships, desired_idle)
+
+    def should_consider_fire(self, player, opponent):
+        if not player.fire_ships_unlocked:
+            return False
+        if player.ships <= MIN_FLEET_FOR_CONVOYS:
+            return False
+        return opponent.shipyard_started or opponent.allocation.guard > 0
 
     def weighted_choice(self, weights, rng):
         total = sum(max(0, weight) for weight in weights.values())
@@ -489,19 +539,25 @@ def default_bot_strategies():
         ),
         BotStrategy(
             name="Human Shadow",
-            trade_weight=1.8,
-            raid_weight=2.4,
-            guard_weight=2.2,
-            fire_weight=0.3,
-            build_priority=["shipyard", "guard_captain", "fort"],
-            convoy_bias=0.7,
-            ship_bias=0.8,
+            trade_weight=2.5,
+            raid_weight=2.2,
+            guard_weight=1.3,
+            fire_weight=0.05,
+            build_priority=[
+                "shipyard",
+                "fort",
+                "trade_guild",
+                "guard_captain",
+                "fire_plans",
+            ],
+            convoy_bias=0.65,
+            ship_bias=0.9,
             shipyard_bias=0.55,
             fort_bias=0.4,
-            trade_guild_bias=0.05,
-            guard_captain_bias=0.35,
-            fire_plans_bias=0.15,
-            construction_idle_bias=0.65,
+            trade_guild_bias=0.25,
+            guard_captain_bias=0.2,
+            fire_plans_bias=0.08,
+            construction_idle_bias=0.7,
         ),
         BotStrategy(
             name="Port Reaper",
