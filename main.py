@@ -1,10 +1,10 @@
 class Rules:
-    VERSION = "0.11"
+    VERSION = "0.12"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
     SMUGGLE_INCOME = 1
-    SHIP_COST = 5
+    SHIP_COST = 6
     SHIPYARD_COST = 5
     SHIPYARD_LABOR_REQUIRED = 5
     SHIPYARD_DISCOUNT = 1
@@ -16,6 +16,10 @@ class Rules:
     FORT_ASSET_VALUE = 10
     FORT_PORT_DEFENSE = 5
     FORT_FIRE_BLOCKS_PER_TURN = 1
+    TRADE_GUILD_COST = 8
+    TRADE_GUILD_LABOR_REQUIRED = 6
+    TRADE_GUILD_ASSET_VALUE = 8
+    TRADE_GUILD_BONUS_STEP = 5
     MAX_TURNS = 12
     MONTHS = [
         "January",
@@ -84,6 +88,9 @@ class Nation:
         self.fort_completed = False
         self.fort_labor = 0
         self.fort_fire_blocks_remaining = 0
+        self.trade_guild_started = False
+        self.trade_guild_completed = False
+        self.trade_guild_labor = 0
         self.fire_ships_unlocked = False
 
     def status_report(self):
@@ -92,6 +99,7 @@ class Nation:
         print(f"  Payroll: {self.payroll_status}")
         print(f"  Shipyard: {self.shipyard_status}")
         print(f"  Fort: {self.fort_status}")
+        print(f"  Trade guild: {self.trade_guild_status}")
         print(f"  Fire ships: {self.fire_ship_status}")
 
     def buy_ships(self, amount):
@@ -110,6 +118,10 @@ class Nation:
     def start_fort(self):
         self.gold -= Rules.FORT_COST
         self.fort_started = True
+
+    def start_trade_guild(self):
+        self.gold -= Rules.TRADE_GUILD_COST
+        self.trade_guild_started = True
 
     def destroy_shipyard(self):
         self.shipyard_started = False
@@ -139,6 +151,19 @@ class Nation:
 
         if self.fort_labor >= Rules.FORT_LABOR_REQUIRED:
             self.fort_completed = True
+
+        return applied_labor
+
+    def add_trade_guild_labor(self, labor):
+        if not self.trade_guild_started or self.trade_guild_completed or labor <= 0:
+            return 0
+
+        remaining_labor = Rules.TRADE_GUILD_LABOR_REQUIRED - self.trade_guild_labor
+        applied_labor = min(labor, remaining_labor)
+        self.trade_guild_labor += applied_labor
+
+        if self.trade_guild_labor >= Rules.TRADE_GUILD_LABOR_REQUIRED:
+            self.trade_guild_completed = True
 
         return applied_labor
 
@@ -178,8 +203,20 @@ class Nation:
         return 0
 
     @property
+    def trade_guild_value(self):
+        if self.trade_guild_completed:
+            return Rules.TRADE_GUILD_ASSET_VALUE
+        return 0
+
+    @property
     def asset_score(self):
-        return self.gold + self.ship_value + self.shipyard_value + self.fort_value
+        return (
+            self.gold
+            + self.ship_value
+            + self.shipyard_value
+            + self.fort_value
+            + self.trade_guild_value
+        )
 
     @property
     def has_treasure_at_sea(self):
@@ -229,6 +266,20 @@ class Nation:
         if self.fort_started:
             return f"under construction, {self.fort_labor}/{Rules.FORT_LABOR_REQUIRED} labor"
         return f"not started ({Rules.FORT_COST} gold, {Rules.FORT_LABOR_REQUIRED} labor)"
+
+    @property
+    def trade_guild_status(self):
+        if self.trade_guild_completed:
+            return "completed"
+        if self.trade_guild_started:
+            return (
+                f"under construction, {self.trade_guild_labor}/"
+                f"{Rules.TRADE_GUILD_LABOR_REQUIRED} labor"
+            )
+        return (
+            f"not started ({Rules.TRADE_GUILD_COST} gold, "
+            f"{Rules.TRADE_GUILD_LABOR_REQUIRED} labor)"
+        )
 
     @property
     def fire_ship_status(self):
@@ -335,7 +386,9 @@ class Game:
         player.status_report()
         print(
             f"  Asset score if game ended now: {player.asset_score} "
-            f"(shipyard value: {player.shipyard_value}, fort value: {player.fort_value})"
+            f"(shipyard value: {player.shipyard_value}, "
+            f"fort value: {player.fort_value}, "
+            f"trade guild value: {player.trade_guild_value})"
         )
         print(
             f"  Trade income: {Rules.TRADE_INCOME} gold, "
@@ -604,7 +657,8 @@ class Game:
         smuggle_income = smuggled_trade * Rules.SMUGGLE_INCOME
 
         normal_income = remaining_trade * Rules.TRADE_INCOME
-        trade_income = smuggle_income + normal_income
+        trade_bonus = self.calculate_trade_guild_bonus(trader, remaining_trade)
+        trade_income = smuggle_income + normal_income + trade_bonus
         treasure_growth = int(trade_income * Rules.TREASURE_TRADE_PERCENT)
 
         print(
@@ -619,6 +673,8 @@ class Game:
             f" - {remaining_trade} trade ship(s) complete trade for "
             f"{normal_income} gold."
         )
+        if trade_bonus:
+            print(f" - Trade guild bonus adds {trade_bonus} gold.")
 
         if treasure_growth and not trader.has_treasure_at_sea:
             trader.treasure_value += treasure_growth
@@ -632,6 +688,12 @@ class Game:
             treasure_growth=treasure_growth,
         )
 
+    def calculate_trade_guild_bonus(self, trader, completed_trade):
+        if not trader.trade_guild_completed or completed_trade <= 0:
+            return 0
+
+        return max(1, completed_trade // Rules.TRADE_GUILD_BONUS_STEP)
+
     def apply_port_labor(self):
         print("\n=== PORT LABOR ===")
         any_labor = False
@@ -641,6 +703,8 @@ class Game:
             shipyard_labor = player.add_shipyard_labor(port_labor)
             port_labor -= shipyard_labor
             fort_labor = player.add_fort_labor(port_labor)
+            port_labor -= fort_labor
+            trade_guild_labor = player.add_trade_guild_labor(port_labor)
 
             if shipyard_labor:
                 any_labor = True
@@ -663,11 +727,28 @@ class Game:
                 if player.fort_completed:
                     print(f"{player.name}'s fort is complete.")
 
+            if trade_guild_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {trade_guild_labor} labor to the "
+                    f"trade guild ({player.trade_guild_labor}/"
+                    f"{Rules.TRADE_GUILD_LABOR_REQUIRED})."
+                )
+                if player.trade_guild_completed:
+                    print(f"{player.name}'s trade guild is complete.")
+
             if not shipyard_labor and player.shipyard_started and not player.shipyard_completed:
                 print(f"{player.name} has no idle ships to work on the shipyard.")
 
             if not fort_labor and player.fort_started and not player.fort_completed:
                 print(f"{player.name} has no idle ships to work on the fort.")
+
+            if (
+                not trade_guild_labor
+                and player.trade_guild_started
+                and not player.trade_guild_completed
+            ):
+                print(f"{player.name} has no idle ships to work on the trade guild.")
 
         if not any_labor:
             print("No port labor is applied this turn.")
@@ -713,6 +794,7 @@ class Game:
             self.show_player_economy(player)
             self.prompt_shipyard_start(player)
             self.prompt_fort_start(player)
+            self.prompt_trade_guild_start(player)
             self.prompt_fire_ship_upgrade(player)
             affordable = player.gold // player.ship_cost
 
@@ -824,6 +906,27 @@ class Game:
                 f"on future turns."
             )
 
+    def prompt_trade_guild_start(self, player):
+        if player.trade_guild_started:
+            return
+
+        if player.gold < Rules.TRADE_GUILD_COST:
+            print(
+                f"{player.name} cannot afford to start a trade guild "
+                f"({Rules.TRADE_GUILD_COST} gold needed)."
+            )
+            return
+
+        if self.prompt_yes_no(
+            f"{player.name}, start trade guild for "
+            f"{Rules.TRADE_GUILD_COST} gold? [y/N]: "
+        ):
+            player.start_trade_guild()
+            print(
+                f"{player.name} starts a trade guild. Idle ships will add labor "
+                f"on future turns."
+            )
+
     def prompt_fire_ship_upgrade(self, player):
         if player.fire_ships_unlocked:
             return
@@ -853,7 +956,8 @@ class Game:
                 f"{player.name}: {player.gold} gold + "
                 f"{player.ships} ships ({player.ship_value} value) + "
                 f"shipyard ({player.shipyard_value} value) + "
-                f"fort ({player.fort_value} value) = "
+                f"fort ({player.fort_value} value) + "
+                f"trade guild ({player.trade_guild_value} value) = "
                 f"{player.asset_score} total assets"
             )
 
