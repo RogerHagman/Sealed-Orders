@@ -1,5 +1,5 @@
 class Rules:
-    VERSION = "0.13"
+    VERSION = "0.14"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -358,11 +358,13 @@ class Game:
     def play_turn(self):
         print(f"\n=== {self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS}) ===")
         self.show_state()
+        before_snapshot = self.snapshot_turn()
 
         for player in self.players:
             self.pause_for_private_entry(player)
             player.allocation = self.prompt_allocation(player)
 
+        orders_snapshot = self.snapshot_turn()
         self.clear_between_players()
         self.reveal_orders()
         self.resolve_orders()
@@ -372,11 +374,67 @@ class Game:
         self.apply_port_labor()
         self.advance_convoys()
         self.buy_phase()
+        after_snapshot = self.snapshot_turn()
+        self.show_turn_summary(before_snapshot, after_snapshot, orders_snapshot)
 
     def show_state(self):
         print("\nPublic state:")
         for player in self.players:
             player.status_report()
+
+    def snapshot_turn(self):
+        return {player.name: self.snapshot_player(player) for player in self.players}
+
+    def snapshot_player(self, player):
+        return {
+            "gold": player.gold,
+            "ships": player.ships,
+            "asset_score": player.asset_score,
+            "treasure_status": f"{player.treasure_value} gold{player.treasure_status}",
+            "payroll_status": player.payroll_status,
+            "shipyard_status": player.shipyard_status,
+            "fort_status": player.fort_status,
+            "trade_guild_status": player.trade_guild_status,
+            "fire_ship_status": player.fire_ship_status,
+            "allocation": Allocation(
+                player.allocation.trade,
+                player.allocation.raid,
+                player.allocation.guard,
+                player.allocation.fire,
+            ),
+        }
+
+    def show_turn_summary(self, before_snapshot, after_snapshot, orders_snapshot):
+        print(f"\n=== END OF {self.current_month.upper()} SUMMARY ===")
+        for player in self.players:
+            before = before_snapshot[player.name]
+            after = after_snapshot[player.name]
+            orders = orders_snapshot[player.name]
+            print(f"\n{player.name}")
+            print(f"  Orders: {orders['allocation']}")
+            print(f"  Gold: {self.format_delta(before['gold'], after['gold'])}")
+            print(f"  Ships: {self.format_delta(before['ships'], after['ships'])}")
+            print(
+                f"  Assets: "
+                f"{self.format_delta(before['asset_score'], after['asset_score'])}"
+            )
+            self.print_status_change("Treasure", before, after, "treasure_status")
+            self.print_status_change("Payroll", before, after, "payroll_status")
+            self.print_status_change("Shipyard", before, after, "shipyard_status")
+            self.print_status_change("Fort", before, after, "fort_status")
+            self.print_status_change("Trade guild", before, after, "trade_guild_status")
+            self.print_status_change("Fire ships", before, after, "fire_ship_status")
+
+    def format_delta(self, before, after):
+        delta = after - before
+        sign = "+" if delta >= 0 else ""
+        return f"{before} -> {after} ({sign}{delta})"
+
+    def print_status_change(self, label, before, after, key):
+        if before[key] == after[key]:
+            return
+
+        print(f"  {label}: {before[key]} -> {after[key]}")
 
     @property
     def current_month(self):

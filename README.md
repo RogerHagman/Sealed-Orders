@@ -56,3 +56,9 @@
 - Unavailable buy-phase actions stay visible with disabled reasons.
 - Players can take multiple buy-phase actions before choosing Done.
 - Final-month payroll still launches automatically before menu actions.
+
+## Version 0.14
+
+- End-of-turn summaries show gold, ships, asset, and order ledgers.
+- Summaries include changed convoy, infrastructure, and fire ship plan statuses.
+- The summary appears after both players finish the buy phase.
