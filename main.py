@@ -2,7 +2,7 @@ import argparse
 
 
 class Rules:
-    VERSION = "0.17"
+    VERSION = "0.20"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -1133,6 +1133,42 @@ if __name__ == "__main__":
         help="summarize recorded human-vs-AI games",
     )
     parser.add_argument(
+        "--train-evolving",
+        type=int,
+        metavar="GENERATIONS",
+        help="train a random evolving strategy against the bot roster",
+    )
+    parser.add_argument(
+        "--training-games",
+        type=int,
+        default=6,
+        help="games per bot per generation for --train-evolving",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.25,
+        help="blend rate toward better mutations for --train-evolving",
+    )
+    parser.add_argument(
+        "--mutation-scale",
+        type=float,
+        default=1.0,
+        help="random weight mutation size for --train-evolving",
+    )
+    parser.add_argument(
+        "--evolved-output",
+        help="optional JSON file for the final --train-evolving strategy",
+    )
+    parser.add_argument(
+        "--training-history",
+        help="optional JSON or CSV file for per-generation training metrics",
+    )
+    parser.add_argument(
+        "--training-graph",
+        help="optional SVG file plotting training win rate by generation",
+    )
+    parser.add_argument(
         "--self-play",
         type=int,
         metavar="GAMES",
@@ -1145,7 +1181,20 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.ai_log_summary:
+    if args.train_evolving is not None:
+        from bot_playtest import train_evolving_strategy
+
+        train_evolving_strategy(
+            generations=args.train_evolving,
+            games_per_bot=args.training_games,
+            learning_rate=args.learning_rate,
+            mutation_scale=args.mutation_scale,
+            seed=args.seed,
+            output_path=args.evolved_output,
+            history_path=args.training_history,
+            graph_path=args.training_graph,
+        )
+    elif args.ai_log_summary:
         from bot_playtest import summarize_ai_games
 
         summarize_ai_games(log_path=args.ai_log)

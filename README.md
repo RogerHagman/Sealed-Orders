@@ -85,3 +85,22 @@
 - Use `--ai-log path/to/file.jsonl` to choose a different log file.
 - Each record includes the AI strategy, winner, final scores, and turn-by-turn orders.
 - Run `python3 main.py --ai-log-summary` to summarize recorded human-vs-AI results.
+
+## Version 0.18
+
+- Added evolving strategy training from random initial weights.
+- Run `python3 main.py --train-evolving 25 --learning-rate 0.25`.
+- The trainer mutates candidate strategies, evaluates them against the bot roster, and blends toward better candidates.
+- Use `--training-games` and `--mutation-scale` to tune how noisy or exploratory training should be.
+- Use `--evolved-output evolved_strategy.json` to save the final learned weights.
+
+## Version 0.19
+
+- Evolving strategy training can now export learning curves.
+- Use `--training-history training.csv` or `training.json` for per-generation metrics.
+- Use `--training-graph training.svg` to create a browser-viewable win-rate graph.
+
+## Version 0.20
+
+- Added `Human Shadow`, a bot profile inferred from recorded human-vs-Privateer games.
+- Evolving strategy training now includes `Human Shadow` in the default opponent roster.

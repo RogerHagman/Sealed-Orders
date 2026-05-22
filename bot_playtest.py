@@ -9,6 +9,15 @@ from pathlib import Path
 from main import Allocation, Game, Rules
 
 AI_GAME_LOG_PATH = Path("ai_game_log.jsonl")
+BOT_WEIGHT_FIELDS = [
+    "trade_weight",
+    "raid_weight",
+    "guard_weight",
+    "fire_weight",
+    "convoy_bias",
+    "ship_bias",
+]
+BUILD_PROJECTS = ["shipyard", "fort", "trade_guild", "fire_plans"]
 
 
 class BotStrategy:
@@ -424,6 +433,16 @@ def default_bot_strategies():
             convoy_bias=0.5,
             ship_bias=0.9,
         ),
+        BotStrategy(
+            name="Human Shadow",
+            trade_weight=1.2,
+            raid_weight=3.3,
+            guard_weight=1.5,
+            fire_weight=0.8,
+            build_priority=["shipyard", "fire_plans"],
+            convoy_bias=0.65,
+            ship_bias=0.85,
+        ),
     ]
 
 
@@ -517,6 +536,443 @@ def print_ai_game_summary(log_path, stats):
             f"{human_win_rate * 100:>13.1f}%  {avg_turns:>9.1f}  "
             f"{avg_human_score:>9.1f}  {avg_ai_score:>6.1f}"
         )
+
+
+def random_evolving_strategy(rng, name="Evolving"):
+    build_priority = BUILD_PROJECTS[:]
+    rng.shuffle(build_priority)
+    build_count = rng.randint(0, len(build_priority))
+
+    return BotStrategy(
+        name=name,
+        trade_weight=rng.uniform(0.0, 5.0),
+        raid_weight=rng.uniform(0.0, 5.0),
+        guard_weight=rng.uniform(0.0, 5.0),
+        fire_weight=rng.uniform(0.0, 5.0),
+        build_priority=build_priority[:build_count],
+        convoy_bias=rng.random(),
+        ship_bias=rng.random(),
+    )
+
+
+def mutate_strategy(strategy, rng, mutation_scale):
+    mutated = copy_strategy(strategy)
+    for field in BOT_WEIGHT_FIELDS:
+        value = getattr(mutated, field)
+        value += rng.uniform(-mutation_scale, mutation_scale)
+        if field.endswith("_bias"):
+            value = clamp(value, 0.0, 1.0)
+        else:
+            value = clamp(value, 0.0, 5.0)
+        setattr(mutated, field, value)
+
+    if rng.random() < 0.35:
+        mutated.build_priority = mutate_build_priority(mutated.build_priority, rng)
+
+    return mutated
+
+
+def mutate_build_priority(build_priority, rng):
+    projects = build_priority[:]
+    action = rng.choice(["add", "remove", "swap"])
+
+    if action == "add":
+        available = [project for project in BUILD_PROJECTS if project not in projects]
+        if available:
+            projects.insert(rng.randint(0, len(projects)), rng.choice(available))
+    elif action == "remove" and projects:
+        projects.pop(rng.randrange(len(projects)))
+    elif action == "swap" and len(projects) >= 2:
+        first = rng.randrange(len(projects))
+        second = rng.randrange(len(projects))
+        projects[first], projects[second] = projects[second], projects[first]
+
+    return projects
+
+
+def blend_strategy(current, candidate, learning_rate):
+    learned = copy_strategy(current)
+    for field in BOT_WEIGHT_FIELDS:
+        current_value = getattr(current, field)
+        candidate_value = getattr(candidate, field)
+        value = current_value + (candidate_value - current_value) * learning_rate
+        if field.endswith("_bias"):
+            value = clamp(value, 0.0, 1.0)
+        else:
+            value = clamp(value, 0.0, 5.0)
+        setattr(learned, field, value)
+
+    learned.build_priority = candidate.build_priority[:]
+    return learned
+
+
+def copy_strategy(strategy):
+    return BotStrategy(
+        name=strategy.name,
+        trade_weight=strategy.trade_weight,
+        raid_weight=strategy.raid_weight,
+        guard_weight=strategy.guard_weight,
+        fire_weight=strategy.fire_weight,
+        build_priority=strategy.build_priority[:],
+        convoy_bias=strategy.convoy_bias,
+        ship_bias=strategy.ship_bias,
+    )
+
+
+def clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
+    stats = {
+        "games": 0,
+        "wins": 0,
+        "draws": 0,
+        "ports": 0,
+        "score_total": 0,
+        "opponent_score_total": 0,
+        "turns_total": 0,
+        "fitness": 0,
+    }
+
+    for opponent in opponents:
+        for game_index in range(games_per_opponent):
+            if game_index % 2 == 0:
+                player_names = ["Evolving", opponent.name]
+                strategies = [strategy, opponent]
+                evolving_index = 0
+            else:
+                player_names = [opponent.name, "Evolving"]
+                strategies = [opponent, strategy]
+                evolving_index = 1
+
+            game = SelfPlayGame(player_names, strategies, rng)
+            result = game.play_silent()
+            evolving_score = result["scores"][evolving_index]
+            opponent_score = result["scores"][1 - evolving_index]
+            margin = evolving_score - opponent_score
+
+            stats["games"] += 1
+            stats["score_total"] += evolving_score
+            stats["opponent_score_total"] += opponent_score
+            stats["turns_total"] += result["turns"]
+            stats["fitness"] += margin
+
+            if result["winner_index"] == evolving_index:
+                stats["wins"] += 1
+                stats["fitness"] += 100
+                if result["win_type"] == "port":
+                    stats["ports"] += 1
+                    stats["fitness"] += 15
+            elif result["winner_index"] is None:
+                stats["draws"] += 1
+                stats["fitness"] += 30
+            else:
+                stats["fitness"] -= 40
+
+    return stats
+
+
+def train_evolving_strategy(
+    generations=25,
+    games_per_bot=6,
+    learning_rate=0.25,
+    mutation_scale=1.0,
+    seed=None,
+    output_path=None,
+    graph_path=None,
+    history_path=None,
+):
+    learning_rate = clamp(learning_rate, 0.0, 1.0)
+    rng = random.Random(seed)
+    opponents = default_bot_strategies()
+    current = random_evolving_strategy(rng)
+    current_stats = evaluate_strategy(current, opponents, games_per_bot, rng)
+
+    print(f"\n=== EVOLVING STRATEGY TRAINING: {generations} GENERATION(S) ===")
+    if seed is not None:
+        print(f"Seed: {seed}")
+    print(f"Learning rate: {learning_rate}, mutation scale: {mutation_scale}")
+    print_evolving_strategy("Initial random strategy", current, current_stats)
+    history = [
+        training_history_record(
+            generation=0,
+            status="initial",
+            stats=current_stats,
+            strategy=current,
+        )
+    ]
+
+    for generation in range(1, generations + 1):
+        candidate = mutate_strategy(current, rng, mutation_scale)
+        candidate_stats = evaluate_strategy(candidate, opponents, games_per_bot, rng)
+
+        if candidate_stats["fitness"] > current_stats["fitness"]:
+            blended = blend_strategy(current, candidate, learning_rate)
+            blended_stats = evaluate_strategy(blended, opponents, games_per_bot, rng)
+            if blended_stats["fitness"] > current_stats["fitness"]:
+                current = blended
+                current_stats = blended_stats
+                status = "learned"
+            else:
+                status = "kept"
+        else:
+            status = "kept"
+
+        print(
+            f"Gen {generation:>3}: {status:<7} "
+            f"fitness {current_stats['fitness']:>7.1f}, "
+            f"wins {current_stats['wins']:>3}/{current_stats['games']}, "
+            f"avg assets {average(current_stats, 'score_total'):>5.1f}"
+        )
+        history.append(
+            training_history_record(
+                generation=generation,
+                status=status,
+                stats=current_stats,
+                strategy=current,
+            )
+        )
+
+    print_evolving_strategy("Final evolved strategy", current, current_stats)
+    if output_path is not None:
+        write_evolved_strategy(current, current_stats, output_path, seed, history)
+    if history_path is not None:
+        write_training_history(history, history_path)
+    if graph_path is not None:
+        write_training_graph(history, graph_path)
+
+    return current
+
+
+def print_evolving_strategy(label, strategy, stats):
+    print(f"\n{label}:")
+    print(
+        f"  weights: trade={strategy.trade_weight:.2f}, "
+        f"raid={strategy.raid_weight:.2f}, guard={strategy.guard_weight:.2f}, "
+        f"fire={strategy.fire_weight:.2f}"
+    )
+    print(
+        f"  buy: build_priority={strategy.build_priority}, "
+        f"convoy_bias={strategy.convoy_bias:.2f}, ship_bias={strategy.ship_bias:.2f}"
+    )
+    print(
+        f"  results: fitness={stats['fitness']:.1f}, "
+        f"wins={stats['wins']}/{stats['games']}, draws={stats['draws']}, "
+        f"port wins={stats['ports']}, avg turns={average(stats, 'turns_total'):.1f}, "
+        f"avg assets={average(stats, 'score_total'):.1f}, "
+        f"avg opponent={average(stats, 'opponent_score_total'):.1f}"
+    )
+
+
+def average(stats, key):
+    if stats["games"] == 0:
+        return 0
+    return stats[key] / stats["games"]
+
+
+def training_history_record(generation, status, stats, strategy):
+    return {
+        "generation": generation,
+        "status": status,
+        "fitness": stats["fitness"],
+        "games": stats["games"],
+        "wins": stats["wins"],
+        "draws": stats["draws"],
+        "port_wins": stats["ports"],
+        "win_rate": stats["wins"] / stats["games"] if stats["games"] else 0,
+        "avg_turns": average(stats, "turns_total"),
+        "avg_assets": average(stats, "score_total"),
+        "avg_opponent_assets": average(stats, "opponent_score_total"),
+        "strategy": strategy_record(strategy),
+    }
+
+
+def write_evolved_strategy(strategy, stats, output_path, seed, history=None):
+    output_path = Path(output_path)
+    if output_path.parent != Path("."):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    record = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "rules_version": Rules.VERSION,
+        "seed": seed,
+        "strategy": strategy_record(strategy),
+        "training_results": stats,
+    }
+    if history is not None:
+        record["history"] = history
+
+    with output_path.open("w", encoding="utf-8") as output_file:
+        json.dump(record, output_file, indent=2, sort_keys=True)
+        output_file.write("\n")
+
+    print(f"\nEvolved strategy written to {output_path}.")
+
+
+def write_training_history(history, history_path):
+    history_path = Path(history_path)
+    if history_path.parent != Path("."):
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if history_path.suffix.lower() == ".csv":
+        write_training_history_csv(history, history_path)
+    else:
+        with history_path.open("w", encoding="utf-8") as history_file:
+            json.dump(history, history_file, indent=2, sort_keys=True)
+            history_file.write("\n")
+
+    print(f"Training history written to {history_path}.")
+
+
+def write_training_history_csv(history, history_path):
+    headers = [
+        "generation",
+        "status",
+        "fitness",
+        "games",
+        "wins",
+        "draws",
+        "port_wins",
+        "win_rate",
+        "avg_turns",
+        "avg_assets",
+        "avg_opponent_assets",
+        "trade_weight",
+        "raid_weight",
+        "guard_weight",
+        "fire_weight",
+        "convoy_bias",
+        "ship_bias",
+        "build_priority",
+    ]
+    with history_path.open("w", encoding="utf-8") as history_file:
+        history_file.write(",".join(headers))
+        history_file.write("\n")
+        for row in history:
+            strategy = row["strategy"]
+            values = [
+                row["generation"],
+                row["status"],
+                row["fitness"],
+                row["games"],
+                row["wins"],
+                row["draws"],
+                row["port_wins"],
+                f"{row['win_rate']:.6f}",
+                f"{row['avg_turns']:.6f}",
+                f"{row['avg_assets']:.6f}",
+                f"{row['avg_opponent_assets']:.6f}",
+                f"{strategy['trade_weight']:.6f}",
+                f"{strategy['raid_weight']:.6f}",
+                f"{strategy['guard_weight']:.6f}",
+                f"{strategy['fire_weight']:.6f}",
+                f"{strategy['convoy_bias']:.6f}",
+                f"{strategy['ship_bias']:.6f}",
+                "|".join(strategy["build_priority"]),
+            ]
+            history_file.write(",".join(str(value) for value in values))
+            history_file.write("\n")
+
+
+def write_training_graph(history, graph_path):
+    graph_path = Path(graph_path)
+    if graph_path.parent != Path("."):
+        graph_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svg = training_graph_svg(history)
+    with graph_path.open("w", encoding="utf-8") as graph_file:
+        graph_file.write(svg)
+
+    print(f"Training graph written to {graph_path}.")
+
+
+def training_graph_svg(history):
+    width = 900
+    height = 520
+    left = 70
+    right = 30
+    top = 40
+    bottom = 70
+    chart_width = width - left - right
+    chart_height = height - top - bottom
+    max_generation = max(row["generation"] for row in history) or 1
+
+    points = []
+    for row in history:
+        x = left + (row["generation"] / max_generation) * chart_width
+        y = top + (1.0 - row["win_rate"]) * chart_height
+        points.append((x, y))
+
+    point_text = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    circles = "\n".join(
+        (
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4">'
+            f"<title>Generation {row['generation']}: "
+            f"{row['win_rate'] * 100:.1f}% win rate, "
+            f"fitness {row['fitness']:.1f}</title></circle>"
+        )
+        for (x, y), row in zip(points, history)
+    )
+    labels = svg_axis_labels(left, top, chart_width, chart_height, max_generation)
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <style>
+    text {{ font-family: Arial, sans-serif; fill: #1f2933; }}
+    .axis {{ stroke: #1f2933; stroke-width: 2; }}
+    .grid {{ stroke: #d8dee9; stroke-width: 1; }}
+    polyline {{ fill: none; stroke: #0b6bcb; stroke-width: 3; }}
+    circle {{ fill: #0b6bcb; stroke: white; stroke-width: 2; }}
+  </style>
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <text x="{width / 2:.0f}" y="24" text-anchor="middle" font-size="20" font-weight="700">Evolving Strategy Win Rate</text>
+  <line class="axis" x1="{left}" y1="{top}" x2="{left}" y2="{top + chart_height}"/>
+  <line class="axis" x1="{left}" y1="{top + chart_height}" x2="{left + chart_width}" y2="{top + chart_height}"/>
+  {labels}
+  <polyline points="{point_text}"/>
+  {circles}
+  <text x="{left + chart_width / 2:.0f}" y="{height - 20}" text-anchor="middle" font-size="14">Generation</text>
+  <text x="20" y="{top + chart_height / 2:.0f}" text-anchor="middle" font-size="14" transform="rotate(-90 20 {top + chart_height / 2:.0f})">Win rate</text>
+</svg>
+"""
+
+
+def svg_axis_labels(left, top, chart_width, chart_height, max_generation):
+    labels = []
+    for step in range(0, 6):
+        rate = step / 5
+        y = top + (1 - rate) * chart_height
+        labels.append(
+            f'<line class="grid" x1="{left}" y1="{y:.1f}" '
+            f'x2="{left + chart_width}" y2="{y:.1f}"/>'
+        )
+        labels.append(
+            f'<text x="{left - 10}" y="{y + 5:.1f}" text-anchor="end" '
+            f'font-size="12">{rate * 100:.0f}%</text>'
+        )
+
+    for step in range(0, 6):
+        generation = round(max_generation * step / 5)
+        x = left + (generation / max_generation) * chart_width
+        labels.append(
+            f'<text x="{x:.1f}" y="{top + chart_height + 22}" '
+            f'text-anchor="middle" font-size="12">{generation}</text>'
+        )
+
+    return "\n  ".join(labels)
+
+
+def strategy_record(strategy):
+    return {
+        "name": strategy.name,
+        "trade_weight": strategy.trade_weight,
+        "raid_weight": strategy.raid_weight,
+        "guard_weight": strategy.guard_weight,
+        "fire_weight": strategy.fire_weight,
+        "build_priority": strategy.build_priority,
+        "convoy_bias": strategy.convoy_bias,
+        "ship_bias": strategy.ship_bias,
+    }
 
 
 def run_self_play(games=100, seed=None):
