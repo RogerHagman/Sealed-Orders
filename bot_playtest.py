@@ -16,8 +16,14 @@ BOT_WEIGHT_FIELDS = [
     "fire_weight",
     "convoy_bias",
     "ship_bias",
+    "shipyard_bias",
+    "fort_bias",
+    "trade_guild_bias",
+    "guard_captain_bias",
+    "fire_plans_bias",
+    "construction_idle_bias",
 ]
-BUILD_PROJECTS = ["shipyard", "fort", "trade_guild", "fire_plans"]
+BUILD_PROJECTS = ["shipyard", "fort", "trade_guild", "guard_captain", "fire_plans"]
 
 
 class BotStrategy:
@@ -31,6 +37,12 @@ class BotStrategy:
         build_priority,
         convoy_bias,
         ship_bias,
+        shipyard_bias=None,
+        fort_bias=None,
+        trade_guild_bias=None,
+        guard_captain_bias=None,
+        fire_plans_bias=None,
+        construction_idle_bias=0.0,
     ):
         self.name = name
         self.trade_weight = trade_weight
@@ -40,6 +52,25 @@ class BotStrategy:
         self.build_priority = build_priority
         self.convoy_bias = convoy_bias
         self.ship_bias = ship_bias
+        self.shipyard_bias = self.default_project_bias("shipyard", shipyard_bias)
+        self.fort_bias = self.default_project_bias("fort", fort_bias)
+        self.trade_guild_bias = self.default_project_bias(
+            "trade_guild",
+            trade_guild_bias,
+        )
+        self.guard_captain_bias = self.default_project_bias(
+            "guard_captain",
+            guard_captain_bias,
+        )
+        self.fire_plans_bias = self.default_project_bias("fire_plans", fire_plans_bias)
+        self.construction_idle_bias = construction_idle_bias
+
+    def default_project_bias(self, project, explicit_bias):
+        if explicit_bias is not None:
+            return explicit_bias
+        if project in self.build_priority:
+            return 1.0
+        return 0.0
 
     def choose_allocation(self, game, player, opponent, rng):
         ships = player.ships
@@ -65,14 +96,10 @@ class BotStrategy:
             weights["raid"] += 1.5
         if opponent.shipyard_started:
             weights["fire"] += 1.5
-        if game.turn <= 3 and any(
-            [
-                player.shipyard_started and not player.shipyard_completed,
-                player.fort_started and not player.fort_completed,
-                player.trade_guild_started and not player.trade_guild_completed,
-            ]
-        ):
-            ships = max(0, ships - rng.choice([1, 1, 2]))
+        if self.has_active_construction(player):
+            idle_cap = min(ships, max(1, int(ships * self.construction_idle_bias + 0.999)))
+            if idle_cap > 0:
+                ships = max(0, ships - rng.randint(0, idle_cap))
 
         allocation = {"trade": 0, "raid": 0, "guard": 0, "fire": 0}
         for _ in range(ships):
@@ -89,21 +116,31 @@ class BotStrategy:
     def run_buy_phase(self, game, player, opponent, rng):
         game.auto_launch_final_payroll(player)
 
-        for project in self.build_priority:
+        for project in self.buy_project_order():
             if project == "shipyard" and game.shipyard_disabled_reason(player) is None:
-                player.start_shipyard()
+                if rng.random() < self.shipyard_bias:
+                    player.start_shipyard()
             elif project == "fort" and game.fort_disabled_reason(player) is None:
-                player.start_fort()
+                if rng.random() < self.fort_bias:
+                    player.start_fort()
             elif (
                 project == "trade_guild"
                 and game.trade_guild_disabled_reason(player) is None
             ):
-                player.start_trade_guild()
+                if rng.random() < self.trade_guild_bias:
+                    player.start_trade_guild()
             elif (
                 project == "fire_plans"
                 and game.fire_ship_plans_disabled_reason(player) is None
             ):
-                player.unlock_fire_ships()
+                if rng.random() < self.fire_plans_bias:
+                    player.unlock_fire_ships()
+            elif (
+                project == "guard_captain"
+                and game.guard_captain_disabled_reason(player) is None
+            ):
+                if rng.random() < self.guard_captain_bias:
+                    player.hire_guard_captain()
 
         if self.should_launch_payroll(game, player, rng):
             player.launch_payroll()
@@ -142,9 +179,25 @@ class BotStrategy:
         return rng.random() < launch_score
 
     def gold_reserve(self, game):
-        if game.turn <= 3 and "shipyard" in self.build_priority:
+        if game.turn <= 3 and self.shipyard_bias >= 0.5:
             return 2
         return 0
+
+    def buy_project_order(self):
+        ordered_projects = self.build_priority[:]
+        for project in BUILD_PROJECTS:
+            if project not in ordered_projects:
+                ordered_projects.append(project)
+        return ordered_projects
+
+    def has_active_construction(self, player):
+        return any(
+            [
+                player.shipyard_started and not player.shipyard_completed,
+                player.fort_started and not player.fort_completed,
+                player.trade_guild_started and not player.trade_guild_completed,
+            ]
+        )
 
     def weighted_choice(self, weights, rng):
         total = sum(max(0, weight) for weight in weights.values())
@@ -351,6 +404,7 @@ def player_record(player):
         "trade_guild_started": player.trade_guild_started,
         "trade_guild_completed": player.trade_guild_completed,
         "fire_ships_unlocked": player.fire_ships_unlocked,
+        "guard_captains": player.guard_captains,
         "treasure_value": player.treasure_value,
         "treasure_at_sea": player.has_treasure_at_sea,
         "payroll_launched": player.payroll_launched,
@@ -525,6 +579,12 @@ def load_strategy(strategy_path):
         build_priority=strategy_data.get("build_priority", []),
         convoy_bias=strategy_data["convoy_bias"],
         ship_bias=strategy_data["ship_bias"],
+        shipyard_bias=strategy_data.get("shipyard_bias"),
+        fort_bias=strategy_data.get("fort_bias"),
+        trade_guild_bias=strategy_data.get("trade_guild_bias"),
+        guard_captain_bias=strategy_data.get("guard_captain_bias"),
+        fire_plans_bias=strategy_data.get("fire_plans_bias"),
+        construction_idle_bias=strategy_data.get("construction_idle_bias", 0.0),
     )
 
 
@@ -786,6 +846,12 @@ def random_evolving_strategy(rng, name="Evolving"):
         build_priority=build_priority[:build_count],
         convoy_bias=rng.random(),
         ship_bias=rng.random(),
+        shipyard_bias=rng.random(),
+        fort_bias=rng.random(),
+        trade_guild_bias=rng.random(),
+        guard_captain_bias=rng.random(),
+        fire_plans_bias=rng.random(),
+        construction_idle_bias=rng.random(),
     )
 
 
@@ -850,6 +916,12 @@ def copy_strategy(strategy):
         build_priority=strategy.build_priority[:],
         convoy_bias=strategy.convoy_bias,
         ship_bias=strategy.ship_bias,
+        shipyard_bias=strategy.shipyard_bias,
+        fort_bias=strategy.fort_bias,
+        trade_guild_bias=strategy.trade_guild_bias,
+        guard_captain_bias=strategy.guard_captain_bias,
+        fire_plans_bias=strategy.fire_plans_bias,
+        construction_idle_bias=strategy.construction_idle_bias,
     )
 
 
@@ -866,6 +938,14 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
         "score_total": 0,
         "opponent_score_total": 0,
         "turns_total": 0,
+        "shipyard_started": 0,
+        "shipyard_completed": 0,
+        "fort_started": 0,
+        "fort_completed": 0,
+        "trade_guild_started": 0,
+        "trade_guild_completed": 0,
+        "guard_captain_games": 0,
+        "guard_captains_total": 0,
         "fitness": 0,
     }
 
@@ -891,6 +971,22 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
             stats["opponent_score_total"] += opponent_score
             stats["turns_total"] += result["turns"]
             stats["fitness"] += margin
+            player = game.players[evolving_index]
+            if player.shipyard_started or player.shipyard_completed:
+                stats["shipyard_started"] += 1
+            if player.shipyard_completed:
+                stats["shipyard_completed"] += 1
+            if player.fort_started or player.fort_completed:
+                stats["fort_started"] += 1
+            if player.fort_completed:
+                stats["fort_completed"] += 1
+            if player.trade_guild_started or player.trade_guild_completed:
+                stats["trade_guild_started"] += 1
+            if player.trade_guild_completed:
+                stats["trade_guild_completed"] += 1
+            if player.guard_captains:
+                stats["guard_captain_games"] += 1
+            stats["guard_captains_total"] += player.guard_captains
 
             if result["winner_index"] == evolving_index:
                 stats["wins"] += 1
@@ -991,11 +1087,26 @@ def print_evolving_strategy(label, strategy, stats):
         f"convoy_bias={strategy.convoy_bias:.2f}, ship_bias={strategy.ship_bias:.2f}"
     )
     print(
+        f"  infrastructure: shipyard={strategy.shipyard_bias:.2f}, "
+        f"fort={strategy.fort_bias:.2f}, "
+        f"trade_guild={strategy.trade_guild_bias:.2f}, "
+        f"guard_captain={strategy.guard_captain_bias:.2f}, "
+        f"fire_plans={strategy.fire_plans_bias:.2f}, "
+        f"idle={strategy.construction_idle_bias:.2f}"
+    )
+    print(
         f"  results: fitness={stats['fitness']:.1f}, "
         f"wins={stats['wins']}/{stats['games']}, draws={stats['draws']}, "
         f"port wins={stats['ports']}, avg turns={average(stats, 'turns_total'):.1f}, "
         f"avg assets={average(stats, 'score_total'):.1f}, "
         f"avg opponent={average(stats, 'opponent_score_total'):.1f}"
+    )
+    print(
+        f"  infra use: forts {stats.get('fort_completed', 0)}/{stats['games']}, "
+        f"shipyards {stats.get('shipyard_completed', 0)}/{stats['games']}, "
+        f"guilds {stats.get('trade_guild_completed', 0)}/{stats['games']}, "
+        f"captains {stats.get('guard_captain_games', 0)}/{stats['games']} "
+        f"(avg {average(stats, 'guard_captains_total'):.1f})"
     )
 
 
@@ -1018,6 +1129,14 @@ def training_history_record(generation, status, stats, strategy):
         "avg_turns": average(stats, "turns_total"),
         "avg_assets": average(stats, "score_total"),
         "avg_opponent_assets": average(stats, "opponent_score_total"),
+        "shipyard_started_rate": average(stats, "shipyard_started"),
+        "shipyard_completed_rate": average(stats, "shipyard_completed"),
+        "fort_started_rate": average(stats, "fort_started"),
+        "fort_completed_rate": average(stats, "fort_completed"),
+        "trade_guild_started_rate": average(stats, "trade_guild_started"),
+        "trade_guild_completed_rate": average(stats, "trade_guild_completed"),
+        "guard_captain_rate": average(stats, "guard_captain_games"),
+        "avg_guard_captains": average(stats, "guard_captains_total"),
         "strategy": strategy_record(strategy),
     }
 
@@ -1072,12 +1191,26 @@ def write_training_history_csv(history, history_path):
         "avg_turns",
         "avg_assets",
         "avg_opponent_assets",
+        "shipyard_started_rate",
+        "shipyard_completed_rate",
+        "fort_started_rate",
+        "fort_completed_rate",
+        "trade_guild_started_rate",
+        "trade_guild_completed_rate",
+        "guard_captain_rate",
+        "avg_guard_captains",
         "trade_weight",
         "raid_weight",
         "guard_weight",
         "fire_weight",
         "convoy_bias",
         "ship_bias",
+        "shipyard_bias",
+        "fort_bias",
+        "trade_guild_bias",
+        "guard_captain_bias",
+        "fire_plans_bias",
+        "construction_idle_bias",
         "build_priority",
     ]
     with history_path.open("w", encoding="utf-8") as history_file:
@@ -1097,12 +1230,26 @@ def write_training_history_csv(history, history_path):
                 f"{row['avg_turns']:.6f}",
                 f"{row['avg_assets']:.6f}",
                 f"{row['avg_opponent_assets']:.6f}",
+                f"{row['shipyard_started_rate']:.6f}",
+                f"{row['shipyard_completed_rate']:.6f}",
+                f"{row['fort_started_rate']:.6f}",
+                f"{row['fort_completed_rate']:.6f}",
+                f"{row['trade_guild_started_rate']:.6f}",
+                f"{row['trade_guild_completed_rate']:.6f}",
+                f"{row['guard_captain_rate']:.6f}",
+                f"{row['avg_guard_captains']:.6f}",
                 f"{strategy['trade_weight']:.6f}",
                 f"{strategy['raid_weight']:.6f}",
                 f"{strategy['guard_weight']:.6f}",
                 f"{strategy['fire_weight']:.6f}",
                 f"{strategy['convoy_bias']:.6f}",
                 f"{strategy['ship_bias']:.6f}",
+                f"{strategy['shipyard_bias']:.6f}",
+                f"{strategy['fort_bias']:.6f}",
+                f"{strategy['trade_guild_bias']:.6f}",
+                f"{strategy['guard_captain_bias']:.6f}",
+                f"{strategy['fire_plans_bias']:.6f}",
+                f"{strategy['construction_idle_bias']:.6f}",
                 "|".join(strategy["build_priority"]),
             ]
             history_file.write(",".join(str(value) for value in values))
@@ -1206,6 +1353,12 @@ def strategy_record(strategy):
         "build_priority": strategy.build_priority,
         "convoy_bias": strategy.convoy_bias,
         "ship_bias": strategy.ship_bias,
+        "shipyard_bias": strategy.shipyard_bias,
+        "fort_bias": strategy.fort_bias,
+        "trade_guild_bias": strategy.trade_guild_bias,
+        "guard_captain_bias": strategy.guard_captain_bias,
+        "fire_plans_bias": strategy.fire_plans_bias,
+        "construction_idle_bias": strategy.construction_idle_bias,
     }
 
 

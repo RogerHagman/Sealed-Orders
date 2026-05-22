@@ -2,7 +2,7 @@ import argparse
 
 
 class Rules:
-    VERSION = "0.24"
+    VERSION = "0.27"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -15,10 +15,15 @@ class Rules:
     FIRE_SHIP_UPGRADE_COST = 5
     PORT_ATTACK_SHIPS_REQUIRED = 5
     FORT_COST = 10
-    FORT_LABOR_REQUIRED = 5
+    FORT_LABOR_REQUIRED = 10
     FORT_ASSET_VALUE = 10
     FORT_PORT_DEFENSE = 10
     FORT_FIRE_BLOCKS_PER_TURN = 1
+    FORT_RAID_BLOCKS_PER_TURN = 2
+    GUARD_CAPTAIN_COST = 3
+    GUARD_CAPTAIN_MAX = 5
+    GUARD_CAPTAIN_PORT_DEFENSE = 1
+    GUARD_CAPTAIN_CONFISCATIONS_PER_TURN = 1
     TRADE_GUILD_COST = 6
     TRADE_GUILD_LABOR_REQUIRED = 5
     TRADE_GUILD_ASSET_VALUE = 8
@@ -69,9 +74,16 @@ class Allocation:
 
 
 class ResolutionResult:
-    def __init__(self, trade_income=0, stolen_income=0, treasure_growth=0):
+    def __init__(
+        self,
+        trade_income=0,
+        stolen_income=0,
+        confiscated_income=0,
+        treasure_growth=0,
+    ):
         self.trade_income = trade_income
         self.stolen_income = stolen_income
+        self.confiscated_income = confiscated_income
         self.treasure_growth = treasure_growth
 
 
@@ -97,6 +109,7 @@ class Nation:
         self.trade_guild_completed = False
         self.trade_guild_labor = 0
         self.fire_ships_unlocked = False
+        self.guard_captains = 0
 
     def status_report(self):
         print(f"{self.name}: {self.gold} gold, {self.ships} ships")
@@ -106,6 +119,7 @@ class Nation:
         print(f"  Fort: {self.fort_status}")
         print(f"  Trade guild: {self.trade_guild_status}")
         print(f"  Fire ships: {self.fire_ship_status}")
+        print(f"  Guard captains: {self.guard_captain_status}")
 
     def buy_ships(self, amount):
         cost = amount * self.ship_cost
@@ -119,6 +133,10 @@ class Nation:
     def unlock_fire_ships(self):
         self.gold -= Rules.FIRE_SHIP_UPGRADE_COST
         self.fire_ships_unlocked = True
+
+    def hire_guard_captain(self):
+        self.gold -= Rules.GUARD_CAPTAIN_COST
+        self.guard_captains += 1
 
     def start_fort(self):
         self.gold -= Rules.FORT_COST
@@ -214,6 +232,12 @@ class Nation:
         return 0
 
     @property
+    def guard_captain_port_defense(self):
+        if self.fort_completed:
+            return self.guard_captains * Rules.GUARD_CAPTAIN_PORT_DEFENSE
+        return 0
+
+    @property
     def asset_score(self):
         return (
             self.gold
@@ -276,7 +300,10 @@ class Nation:
     @property
     def fort_status(self):
         if self.fort_completed:
-            return "completed"
+            return (
+                "completed, blocks "
+                f"{Rules.FORT_RAID_BLOCKS_PER_TURN} raid ship(s)"
+            )
         if self.fort_started:
             return f"under construction, {self.fort_labor}/{Rules.FORT_LABOR_REQUIRED} labor"
         return f"not started ({Rules.FORT_COST} gold, {Rules.FORT_LABOR_REQUIRED} labor)"
@@ -300,6 +327,23 @@ class Nation:
         if self.fire_ships_unlocked:
             return "available"
         return f"locked ({Rules.FIRE_SHIP_UPGRADE_COST} gold upgrade)"
+
+    @property
+    def guard_captain_status(self):
+        status = f"{self.guard_captains}/{Rules.GUARD_CAPTAIN_MAX}"
+        if self.guard_captains == 0:
+            return status
+
+        confiscations = (
+            self.guard_captains * Rules.GUARD_CAPTAIN_CONFISCATIONS_PER_TURN
+        )
+        defense = self.guard_captain_port_defense
+        if defense:
+            return (
+                f"{status}, confiscates {confiscations} smuggle gold, "
+                f"+{defense} port defense"
+            )
+        return f"{status}, confiscates {confiscations} smuggle gold"
 
     def launch_treasure(self):
         self.treasure_turns_remaining = Rules.TREASURE_TRAVEL_TURNS
@@ -413,6 +457,7 @@ class Game:
             "fort_status": player.fort_status,
             "trade_guild_status": player.trade_guild_status,
             "fire_ship_status": player.fire_ship_status,
+            "guard_captain_status": player.guard_captain_status,
             "allocation": Allocation(
                 player.allocation.trade,
                 player.allocation.raid,
@@ -441,6 +486,12 @@ class Game:
             self.print_status_change("Fort", before, after, "fort_status")
             self.print_status_change("Trade guild", before, after, "trade_guild_status")
             self.print_status_change("Fire ships", before, after, "fire_ship_status")
+            self.print_status_change(
+                "Guard captains",
+                before,
+                after,
+                "guard_captain_status",
+            )
 
     def format_delta(self, before, after):
         delta = after - before
@@ -468,7 +519,8 @@ class Game:
         )
         print(
             f"  Trade income: {Rules.TRADE_INCOME} gold, "
-            f"smuggle income: {Rules.SMUGGLE_INCOME} gold"
+            f"smuggle income: {Rules.SMUGGLE_INCOME} gold, "
+            f"guard captain cost: {Rules.GUARD_CAPTAIN_COST} gold"
         )
         print(
             f"  Ship cost: {player.ship_cost} gold, "
@@ -553,19 +605,29 @@ class Game:
         result_one = self.resolve_income(trader=player_one, opponent=player_two)
         result_two = self.resolve_income(trader=player_two, opponent=player_one)
 
-        player_one_income = result_one.trade_income + result_two.stolen_income
-        player_two_income = result_two.trade_income + result_one.stolen_income
+        player_one_income = (
+            result_one.trade_income
+            + result_two.stolen_income
+            + result_two.confiscated_income
+        )
+        player_two_income = (
+            result_two.trade_income
+            + result_one.stolen_income
+            + result_one.confiscated_income
+        )
 
         player_one.gold += player_one_income
         player_two.gold += player_two_income
 
         print(
             f"\n{player_one.name} earns {player_one_income} gold total "
-            f"({result_one.trade_income} trade, {result_two.stolen_income} stolen)."
+            f"({result_one.trade_income} trade, {result_two.stolen_income} stolen, "
+            f"{result_two.confiscated_income} confiscated)."
         )
         print(
             f"{player_two.name} earns {player_two_income} gold total "
-            f"({result_two.trade_income} trade, {result_one.stolen_income} stolen)."
+            f"({result_two.trade_income} trade, {result_one.stolen_income} stolen, "
+            f"{result_one.confiscated_income} confiscated)."
         )
 
     def resolve_fire_ships(self, attacker, defender):
@@ -677,6 +739,7 @@ class Game:
         required_raids = Rules.PORT_ATTACK_SHIPS_REQUIRED
         if defender.fort_completed:
             required_raids += Rules.FORT_PORT_DEFENSE
+            required_raids += defender.guard_captain_port_defense
 
         if attacker.allocation.raid < required_raids:
             return False
@@ -696,8 +759,10 @@ class Game:
         remaining_trade = trader.allocation.trade
         active_raids = opponent.allocation.raid
         stolen_income = 0
+        confiscated_income = 0
 
         print(f"\n{trader.name}'s trade and convoys:")
+        active_raids = self.apply_fort_raid_blocks(trader, active_raids)
 
         if trader.has_treasure_at_sea and active_raids > 0:
             treasure_stolen = trader.capture_treasure()
@@ -735,7 +800,13 @@ class Game:
 
         smuggled_trade = min(opponent.allocation.guard, remaining_trade)
         remaining_trade -= smuggled_trade
-        smuggle_income = smuggled_trade * Rules.SMUGGLE_INCOME
+        confiscated_trade = min(
+            smuggled_trade,
+            opponent.guard_captains * Rules.GUARD_CAPTAIN_CONFISCATIONS_PER_TURN,
+        )
+        paid_smuggled_trade = smuggled_trade - confiscated_trade
+        smuggle_income = paid_smuggled_trade * Rules.SMUGGLE_INCOME
+        confiscated_income = confiscated_trade * Rules.SMUGGLE_INCOME
 
         normal_income = remaining_trade * Rules.TRADE_INCOME
         trade_bonus = self.calculate_trade_guild_bonus(trader, remaining_trade)
@@ -750,6 +821,11 @@ class Game:
             f" - {smuggled_trade} trade ship(s) smuggle past guards for "
             f"{smuggle_income} gold."
         )
+        if confiscated_income:
+            print(
+                f" - Guard captains catch {confiscated_trade} smuggler(s); "
+                f"{opponent.name} confiscates {confiscated_income} gold."
+            )
         print(
             f" - {remaining_trade} trade ship(s) complete trade for "
             f"{normal_income} gold."
@@ -766,8 +842,20 @@ class Game:
         return ResolutionResult(
             trade_income=trade_income,
             stolen_income=stolen_income,
+            confiscated_income=confiscated_income,
             treasure_growth=treasure_growth,
         )
+
+    def apply_fort_raid_blocks(self, trader, active_raids):
+        if not trader.fort_completed or active_raids <= 0:
+            return active_raids
+
+        blocked_raids = min(active_raids, Rules.FORT_RAID_BLOCKS_PER_TURN)
+        print(
+            f" - Fort guns drive off {blocked_raids} raid ship(s) "
+            "from the harbor approaches."
+        )
+        return active_raids - blocked_raids
 
     def calculate_trade_guild_bonus(self, trader, completed_trade):
         if not trader.trade_guild_completed or completed_trade <= 0:
@@ -930,18 +1018,24 @@ class Game:
             ),
             (
                 "5",
+                "Hire guard captain",
+                self.hire_guard_captain_action,
+                self.guard_captain_disabled_reason(player),
+            ),
+            (
+                "6",
                 "Buy fire ship plans",
                 self.buy_fire_ship_plans_action,
                 self.fire_ship_plans_disabled_reason(player),
             ),
             (
-                "6",
+                "7",
                 "Launch treasure convoy",
                 self.launch_treasure_action,
                 self.treasure_launch_disabled_reason(player),
             ),
             (
-                "7",
+                "8",
                 "Launch payroll convoy",
                 self.launch_payroll_action,
                 self.payroll_launch_disabled_reason(player),
@@ -985,6 +1079,13 @@ class Game:
             return "already unlocked"
         if player.gold < Rules.FIRE_SHIP_UPGRADE_COST:
             return f"too expensive ({Rules.FIRE_SHIP_UPGRADE_COST} gold needed)"
+        return None
+
+    def guard_captain_disabled_reason(self, player):
+        if player.guard_captains >= Rules.GUARD_CAPTAIN_MAX:
+            return "maximum hired"
+        if player.gold < Rules.GUARD_CAPTAIN_COST:
+            return f"too expensive ({Rules.GUARD_CAPTAIN_COST} gold needed)"
         return None
 
     def treasure_launch_disabled_reason(self, player):
@@ -1053,6 +1154,13 @@ class Game:
         player.unlock_fire_ships()
         print(f"{player.name} can assign fire ships starting next turn.")
 
+    def hire_guard_captain_action(self, player):
+        player.hire_guard_captain()
+        print(
+            f"{player.name} hires a guard captain "
+            f"({player.guard_captains}/{Rules.GUARD_CAPTAIN_MAX})."
+        )
+
     def launch_treasure_action(self, player):
         player.launch_treasure()
         print(
@@ -1089,7 +1197,8 @@ class Game:
                 f"{player.ships} ships ({player.ship_value} value) + "
                 f"shipyard ({player.shipyard_value} value) + "
                 f"fort ({player.fort_value} value) + "
-                f"trade guild ({player.trade_guild_value} value) = "
+                f"trade guild ({player.trade_guild_value} value) + "
+                f"guard captains ({player.guard_captains}) = "
                 f"{player.asset_score} total assets"
             )
 

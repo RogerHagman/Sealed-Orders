@@ -128,3 +128,21 @@
 - Added `Iron Tempest`, the v6 evolved generalist, to the default bot roster.
 - Payroll launch now costs 1 gold per ship and can take a nation below 0 gold.
 - Completed trade guilds reduce payroll launch cost by 25%, rounded up.
+
+## Version 0.25
+
+- Restored fort cost and labor to 10 after the temporary infrastructure stress test.
+- Evolving strategies now learn infrastructure buy biases and construction idle labor bias directly.
+- Training history now records infrastructure start/completion rates.
+
+## Version 0.26
+
+- Completed forts now drive off up to 2 active raid ships before convoy capture or trade interception.
+- Fort harbor guns repel raiders without destroying ships or changing open-sea guard battles.
+
+## Version 0.27
+
+- Added guard captains as repeatable buy-phase hires costing 3 gold each, up to 5.
+- Guard captains confiscate 1 gold each from enemy trade ships that smuggle past this nation's guards.
+- Guard captains add +1 home port defense each only while their nation also has a completed fort.
+- Evolving strategies now learn a guard captain buy bias and training history records captain use.
