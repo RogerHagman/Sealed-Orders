@@ -1,5 +1,5 @@
 # __version__.py
-__version__ = "0.20"
+__version__ = "0.21"
 __author__ = "Roger Hagman"
 __email__ = "rogerhagman84@gmail.com"
 __license__ = "GPL-3.0"

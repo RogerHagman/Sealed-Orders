@@ -2,7 +2,7 @@ import argparse
 
 
 class Rules:
-    VERSION = "0.20"
+    VERSION = "0.21"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -1169,6 +1169,20 @@ if __name__ == "__main__":
         help="optional SVG file plotting training win rate by generation",
     )
     parser.add_argument(
+        "--evaluate-strategy",
+        help="benchmark an evolved strategy JSON file against the bot roster",
+    )
+    parser.add_argument(
+        "--eval-games",
+        type=int,
+        default=100,
+        help="games per opponent for --evaluate-strategy",
+    )
+    parser.add_argument(
+        "--eval-output",
+        help="optional JSON or CSV file for --evaluate-strategy results",
+    )
+    parser.add_argument(
         "--self-play",
         type=int,
         metavar="GAMES",
@@ -1181,7 +1195,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.train_evolving is not None:
+    if args.evaluate_strategy is not None:
+        from bot_playtest import evaluate_strategy_file
+
+        evaluate_strategy_file(
+            strategy_path=args.evaluate_strategy,
+            games_per_opponent=args.eval_games,
+            seed=args.seed,
+            output_path=args.eval_output,
+        )
+    elif args.train_evolving is not None:
         from bot_playtest import train_evolving_strategy
 
         train_evolving_strategy(

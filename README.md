@@ -104,3 +104,9 @@
 
 - Added `Human Shadow`, a bot profile inferred from recorded human-vs-Privateer games.
 - Evolving strategy training now includes `Human Shadow` in the default opponent roster.
+
+## Version 0.21
+
+- Added evolved strategy benchmarking against the full bot roster.
+- Run `python3 main.py --evaluate-strategy evolved_strategy.json --eval-games 500`.
+- Use `--eval-output benchmark.csv` or `benchmark.json` to save per-opponent results.

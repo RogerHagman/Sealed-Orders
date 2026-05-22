@@ -443,6 +443,36 @@ def default_bot_strategies():
             convoy_bias=0.65,
             ship_bias=0.85,
         ),
+        BotStrategy(
+            name="Port Reaper",
+            trade_weight=1.4,
+            raid_weight=3.33,
+            guard_weight=0.05,
+            fire_weight=3.07,
+            build_priority=[],
+            convoy_bias=0.03,
+            ship_bias=0.74,
+        ),
+        BotStrategy(
+            name="Harbor Lock",
+            trade_weight=4.72,
+            raid_weight=0.68,
+            guard_weight=3.6,
+            fire_weight=2.0,
+            build_priority=[],
+            convoy_bias=0.18,
+            ship_bias=0.9,
+        ),
+        BotStrategy(
+            name="Corsair Spark",
+            trade_weight=4.4,
+            raid_weight=4.01,
+            guard_weight=1.55,
+            fire_weight=4.31,
+            build_priority=[],
+            convoy_bias=0.69,
+            ship_bias=0.16,
+        ),
     ]
 
 
@@ -458,6 +488,24 @@ def find_strategy(name):
 
     available = ", ".join(strategy_names())
     raise ValueError(f"Unknown AI strategy '{name}'. Available strategies: {available}.")
+
+
+def load_strategy(strategy_path):
+    strategy_path = Path(strategy_path)
+    with strategy_path.open(encoding="utf-8") as strategy_file:
+        record = json.load(strategy_file)
+
+    strategy_data = record.get("strategy", record)
+    return BotStrategy(
+        name=strategy_data.get("name", strategy_path.stem),
+        trade_weight=strategy_data["trade_weight"],
+        raid_weight=strategy_data["raid_weight"],
+        guard_weight=strategy_data["guard_weight"],
+        fire_weight=strategy_data["fire_weight"],
+        build_priority=strategy_data.get("build_priority", []),
+        convoy_bias=strategy_data["convoy_bias"],
+        ship_bias=strategy_data["ship_bias"],
+    )
 
 
 def play_vs_ai(
@@ -536,6 +584,172 @@ def print_ai_game_summary(log_path, stats):
             f"{human_win_rate * 100:>13.1f}%  {avg_turns:>9.1f}  "
             f"{avg_human_score:>9.1f}  {avg_ai_score:>6.1f}"
         )
+
+
+def evaluate_strategy_file(strategy_path, games_per_opponent=100, seed=None, output_path=None):
+    rng = random.Random(seed)
+    strategy = load_strategy(strategy_path)
+    opponents = default_bot_strategies()
+    rows = []
+
+    print(f"\n=== STRATEGY BENCHMARK: {strategy.name} ===")
+    print(f"Strategy file: {strategy_path}")
+    if seed is not None:
+        print(f"Seed: {seed}")
+    print(f"Games per opponent: {games_per_opponent}")
+
+    for opponent in opponents:
+        row = evaluate_head_to_head(strategy, opponent, games_per_opponent, rng)
+        rows.append(row)
+
+    print_strategy_benchmark(rows)
+    if output_path is not None:
+        write_strategy_benchmark(rows, output_path)
+
+
+def evaluate_head_to_head(strategy, opponent, games, rng):
+    stats = {
+        "opponent": opponent.name,
+        "games": 0,
+        "wins": 0,
+        "losses": 0,
+        "draws": 0,
+        "port_wins": 0,
+        "port_losses": 0,
+        "turns_total": 0,
+        "score_total": 0,
+        "opponent_score_total": 0,
+    }
+
+    for game_index in range(games):
+        if game_index % 2 == 0:
+            player_names = [strategy.name, opponent.name]
+            strategies = [strategy, opponent]
+            strategy_index = 0
+        else:
+            player_names = [opponent.name, strategy.name]
+            strategies = [opponent, strategy]
+            strategy_index = 1
+
+        game = SelfPlayGame(player_names, strategies, rng)
+        result = game.play_silent()
+        opponent_index = 1 - strategy_index
+
+        stats["games"] += 1
+        stats["turns_total"] += result["turns"]
+        stats["score_total"] += result["scores"][strategy_index]
+        stats["opponent_score_total"] += result["scores"][opponent_index]
+
+        if result["winner_index"] == strategy_index:
+            stats["wins"] += 1
+            if result["win_type"] == "port":
+                stats["port_wins"] += 1
+        elif result["winner_index"] is None:
+            stats["draws"] += 1
+        else:
+            stats["losses"] += 1
+            if result["win_type"] == "port":
+                stats["port_losses"] += 1
+
+    return stats
+
+
+def print_strategy_benchmark(rows):
+    print(
+        "\nOpponent       Games  Wins  Losses  Draws  Win rate  "
+        "Port wins  Port losses  Avg turns  Avg assets  Opp avg"
+    )
+    print(
+        "-------------  -----  ----  ------  -----  --------  "
+        "---------  -----------  ---------  ----------  -------"
+    )
+
+    totals = defaultdict(int)
+    for row in rows:
+        print_strategy_benchmark_row(row)
+        for key in [
+            "games",
+            "wins",
+            "losses",
+            "draws",
+            "port_wins",
+            "port_losses",
+            "turns_total",
+            "score_total",
+            "opponent_score_total",
+        ]:
+            totals[key] += row[key]
+
+    total_row = dict(totals)
+    total_row["opponent"] = "TOTAL"
+    print_strategy_benchmark_row(total_row)
+
+
+def print_strategy_benchmark_row(row):
+    games = row["games"]
+    win_rate = row["wins"] / games if games else 0
+    avg_turns = row["turns_total"] / games if games else 0
+    avg_score = row["score_total"] / games if games else 0
+    avg_opponent_score = row["opponent_score_total"] / games if games else 0
+
+    print(
+        f"{row['opponent']:<13}  {games:>5}  {row['wins']:>4}  "
+        f"{row['losses']:>6}  {row['draws']:>5}  "
+        f"{win_rate * 100:>7.1f}%  {row['port_wins']:>9}  "
+        f"{row['port_losses']:>11}  {avg_turns:>9.1f}  "
+        f"{avg_score:>10.1f}  {avg_opponent_score:>7.1f}"
+    )
+
+
+def write_strategy_benchmark(rows, output_path):
+    output_path = Path(output_path)
+    if output_path.parent != Path("."):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if output_path.suffix.lower() == ".csv":
+        write_strategy_benchmark_csv(rows, output_path)
+    else:
+        with output_path.open("w", encoding="utf-8") as output_file:
+            json.dump(rows, output_file, indent=2, sort_keys=True)
+            output_file.write("\n")
+
+    print(f"\nStrategy benchmark written to {output_path}.")
+
+
+def write_strategy_benchmark_csv(rows, output_path):
+    headers = [
+        "opponent",
+        "games",
+        "wins",
+        "losses",
+        "draws",
+        "win_rate",
+        "port_wins",
+        "port_losses",
+        "avg_turns",
+        "avg_assets",
+        "avg_opponent_assets",
+    ]
+    with output_path.open("w", encoding="utf-8") as output_file:
+        output_file.write(",".join(headers))
+        output_file.write("\n")
+        for row in rows:
+            games = row["games"]
+            values = [
+                row["opponent"],
+                games,
+                row["wins"],
+                row["losses"],
+                row["draws"],
+                f"{row['wins'] / games if games else 0:.6f}",
+                row["port_wins"],
+                row["port_losses"],
+                f"{row['turns_total'] / games if games else 0:.6f}",
+                f"{row['score_total'] / games if games else 0:.6f}",
+                f"{row['opponent_score_total'] / games if games else 0:.6f}",
+            ]
+            output_file.write(",".join(str(value) for value in values))
+            output_file.write("\n")
 
 
 def random_evolving_strategy(rng, name="Evolving"):
