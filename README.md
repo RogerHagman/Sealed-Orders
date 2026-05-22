@@ -110,3 +110,15 @@
 - Added evolved strategy benchmarking against the full bot roster.
 - Run `python3 main.py --evaluate-strategy evolved_strategy.json --eval-games 500`.
 - Use `--eval-output benchmark.csv` or `benchmark.json` to save per-opponent results.
+
+## Version 0.22
+
+- Added `Storm Reaver`, the v4 evolved generalist, to the default bot roster.
+- New training and benchmark runs now include `Storm Reaver`.
+
+## Version 0.23
+
+- Infrastructure balance pass to test broader strategic branches.
+- Fort labor reduced from 10 to 5, while port defense rises from +5 to +10.
+- Shipyard labor reduced from 5 to 3, and ship discount rises from 1 to 2.
+- Trade guild cost reduced from 8 to 6, labor from 6 to 5, and bonus step from 5 to 3.

@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520">
+  <style>
+    text { font-family: Arial, sans-serif; fill: #1f2933; }
+    .axis { stroke: #1f2933; stroke-width: 2; }
+    .grid { stroke: #d8dee9; stroke-width: 1; }
+    polyline { fill: none; stroke: #0b6bcb; stroke-width: 3; }
+    circle { fill: #0b6bcb; stroke: white; stroke-width: 2; }
+  </style>
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <text x="450" y="24" text-anchor="middle" font-size="20" font-weight="700">Evolving Strategy Win Rate</text>
+  <line class="axis" x1="70" y1="40" x2="70" y2="450"/>
+  <line class="axis" x1="70" y1="450" x2="870" y2="450"/>
+  <line class="grid" x1="70" y1="450.0" x2="870" y2="450.0"/>
+  <text x="60" y="455.0" text-anchor="end" font-size="12">0%</text>
+  <line class="grid" x1="70" y1="368.0" x2="870" y2="368.0"/>
+  <text x="60" y="373.0" text-anchor="end" font-size="12">20%</text>
+  <line class="grid" x1="70" y1="286.0" x2="870" y2="286.0"/>
+  <text x="60" y="291.0" text-anchor="end" font-size="12">40%</text>
+  <line class="grid" x1="70" y1="204.0" x2="870" y2="204.0"/>
+  <text x="60" y="209.0" text-anchor="end" font-size="12">60%</text>
+  <line class="grid" x1="70" y1="122.0" x2="870" y2="122.0"/>
+  <text x="60" y="127.0" text-anchor="end" font-size="12">80%</text>
+  <line class="grid" x1="70" y1="40.0" x2="870" y2="40.0"/>
+  <text x="60" y="45.0" text-anchor="end" font-size="12">100%</text>
+  <text x="70.0" y="472" text-anchor="middle" font-size="12">0</text>
+  <text x="230.0" y="472" text-anchor="middle" font-size="12">20</text>
+  <text x="390.0" y="472" text-anchor="middle" font-size="12">40</text>
+  <text x="550.0" y="472" text-anchor="middle" font-size="12">60</text>
+  <text x="710.0" y="472" text-anchor="middle" font-size="12">80</text>
+  <text x="870.0" y="472" text-anchor="middle" font-size="12">100</text>
+  <polyline points="70.0,195.4 78.0,192.1 86.0,192.1 94.0,192.1 102.0,192.1 110.0,192.1 118.0,192.1 126.0,192.1 134.0,192.1 142.0,192.1 150.0,192.1 158.0,192.1 166.0,192.1 174.0,192.1 182.0,190.1 190.0,190.1 198.0,190.1 206.0,190.1 214.0,190.1 222.0,190.1 230.0,188.8 238.0,188.8 246.0,188.8 254.0,188.8 262.0,188.8 270.0,188.8 278.0,188.8 286.0,188.8 294.0,188.8 302.0,188.8 310.0,188.8 318.0,188.8 326.0,188.8 334.0,185.1 342.0,181.4 350.0,181.4 358.0,179.0 366.0,179.0 374.0,179.0 382.0,179.0 390.0,179.0 398.0,179.0 406.0,172.0 414.0,168.7 422.0,168.7 430.0,168.7 438.0,168.7 446.0,168.7 454.0,168.7 462.0,165.5 470.0,165.5 478.0,159.7 486.0,159.7 494.0,159.7 502.0,159.7 510.0,159.7 518.0,159.7 526.0,159.7 534.0,159.7 542.0,159.7 550.0,159.7 558.0,156.4 566.0,156.4 574.0,156.4 582.0,156.4 590.0,156.4 598.0,156.4 606.0,156.4 614.0,156.4 622.0,156.4 630.0,156.4 638.0,156.4 646.0,156.4 654.0,156.4 662.0,156.4 670.0,156.4 678.0,154.8 686.0,154.8 694.0,149.1 702.0,149.1 710.0,149.1 718.0,149.1 726.0,149.1 734.0,144.1 742.0,144.1 750.0,144.1 758.0,144.1 766.0,137.6 774.0,137.6 782.0,137.6 790.0,137.6 798.0,137.6 806.0,137.6 814.0,137.6 822.0,137.6 830.0,137.6 838.0,137.6 846.0,137.6 854.0,137.6 862.0,137.6 870.0,137.6"/>
+  <circle cx="70.0" cy="195.4" r="4"><title>Generation 0: 62.1% win rate, fitness 74018.0</title></circle>
+<circle cx="78.0" cy="192.1" r="4"><title>Generation 1: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="86.0" cy="192.1" r="4"><title>Generation 2: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="94.0" cy="192.1" r="4"><title>Generation 3: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="102.0" cy="192.1" r="4"><title>Generation 4: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="110.0" cy="192.1" r="4"><title>Generation 5: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="118.0" cy="192.1" r="4"><title>Generation 6: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="126.0" cy="192.1" r="4"><title>Generation 7: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="134.0" cy="192.1" r="4"><title>Generation 8: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="142.0" cy="192.1" r="4"><title>Generation 9: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="150.0" cy="192.1" r="4"><title>Generation 10: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="158.0" cy="192.1" r="4"><title>Generation 11: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="166.0" cy="192.1" r="4"><title>Generation 12: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="174.0" cy="192.1" r="4"><title>Generation 13: 62.9% win rate, fitness 76298.0</title></circle>
+<circle cx="182.0" cy="190.1" r="4"><title>Generation 14: 63.4% win rate, fitness 76484.0</title></circle>
+<circle cx="190.0" cy="190.1" r="4"><title>Generation 15: 63.4% win rate, fitness 76484.0</title></circle>
+<circle cx="198.0" cy="190.1" r="4"><title>Generation 16: 63.4% win rate, fitness 76484.0</title></circle>
+<circle cx="206.0" cy="190.1" r="4"><title>Generation 17: 63.4% win rate, fitness 76484.0</title></circle>
+<circle cx="214.0" cy="190.1" r="4"><title>Generation 18: 63.4% win rate, fitness 76484.0</title></circle>
+<circle cx="222.0" cy="190.1" r="4"><title>Generation 19: 63.4% win rate, fitness 76484.0</title></circle>
+<circle cx="230.0" cy="188.8" r="4"><title>Generation 20: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="238.0" cy="188.8" r="4"><title>Generation 21: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="246.0" cy="188.8" r="4"><title>Generation 22: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="254.0" cy="188.8" r="4"><title>Generation 23: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="262.0" cy="188.8" r="4"><title>Generation 24: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="270.0" cy="188.8" r="4"><title>Generation 25: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="278.0" cy="188.8" r="4"><title>Generation 26: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="286.0" cy="188.8" r="4"><title>Generation 27: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="294.0" cy="188.8" r="4"><title>Generation 28: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="302.0" cy="188.8" r="4"><title>Generation 29: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="310.0" cy="188.8" r="4"><title>Generation 30: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="318.0" cy="188.8" r="4"><title>Generation 31: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="326.0" cy="188.8" r="4"><title>Generation 32: 63.7% win rate, fitness 79232.0</title></circle>
+<circle cx="334.0" cy="185.1" r="4"><title>Generation 33: 64.6% win rate, fitness 80207.0</title></circle>
+<circle cx="342.0" cy="181.4" r="4"><title>Generation 34: 65.5% win rate, fitness 82904.0</title></circle>
+<circle cx="350.0" cy="181.4" r="4"><title>Generation 35: 65.5% win rate, fitness 82904.0</title></circle>
+<circle cx="358.0" cy="179.0" r="4"><title>Generation 36: 66.1% win rate, fitness 84152.0</title></circle>
+<circle cx="366.0" cy="179.0" r="4"><title>Generation 37: 66.1% win rate, fitness 84152.0</title></circle>
+<circle cx="374.0" cy="179.0" r="4"><title>Generation 38: 66.1% win rate, fitness 84152.0</title></circle>
+<circle cx="382.0" cy="179.0" r="4"><title>Generation 39: 66.1% win rate, fitness 84152.0</title></circle>
+<circle cx="390.0" cy="179.0" r="4"><title>Generation 40: 66.1% win rate, fitness 84152.0</title></circle>
+<circle cx="398.0" cy="179.0" r="4"><title>Generation 41: 66.1% win rate, fitness 84152.0</title></circle>
+<circle cx="406.0" cy="172.0" r="4"><title>Generation 42: 67.8% win rate, fitness 89357.0</title></circle>
+<circle cx="414.0" cy="168.7" r="4"><title>Generation 43: 68.6% win rate, fitness 91724.0</title></circle>
+<circle cx="422.0" cy="168.7" r="4"><title>Generation 44: 68.6% win rate, fitness 91724.0</title></circle>
+<circle cx="430.0" cy="168.7" r="4"><title>Generation 45: 68.6% win rate, fitness 91724.0</title></circle>
+<circle cx="438.0" cy="168.7" r="4"><title>Generation 46: 68.6% win rate, fitness 91724.0</title></circle>
+<circle cx="446.0" cy="168.7" r="4"><title>Generation 47: 68.6% win rate, fitness 91724.0</title></circle>
+<circle cx="454.0" cy="168.7" r="4"><title>Generation 48: 68.6% win rate, fitness 91724.0</title></circle>
+<circle cx="462.0" cy="165.5" r="4"><title>Generation 49: 69.4% win rate, fitness 93963.0</title></circle>
+<circle cx="470.0" cy="165.5" r="4"><title>Generation 50: 69.4% win rate, fitness 93963.0</title></circle>
+<circle cx="478.0" cy="159.7" r="4"><title>Generation 51: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="486.0" cy="159.7" r="4"><title>Generation 52: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="494.0" cy="159.7" r="4"><title>Generation 53: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="502.0" cy="159.7" r="4"><title>Generation 54: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="510.0" cy="159.7" r="4"><title>Generation 55: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="518.0" cy="159.7" r="4"><title>Generation 56: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="526.0" cy="159.7" r="4"><title>Generation 57: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="534.0" cy="159.7" r="4"><title>Generation 58: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="542.0" cy="159.7" r="4"><title>Generation 59: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="550.0" cy="159.7" r="4"><title>Generation 60: 70.8% win rate, fitness 96182.0</title></circle>
+<circle cx="558.0" cy="156.4" r="4"><title>Generation 61: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="566.0" cy="156.4" r="4"><title>Generation 62: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="574.0" cy="156.4" r="4"><title>Generation 63: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="582.0" cy="156.4" r="4"><title>Generation 64: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="590.0" cy="156.4" r="4"><title>Generation 65: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="598.0" cy="156.4" r="4"><title>Generation 66: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="606.0" cy="156.4" r="4"><title>Generation 67: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="614.0" cy="156.4" r="4"><title>Generation 68: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="622.0" cy="156.4" r="4"><title>Generation 69: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="630.0" cy="156.4" r="4"><title>Generation 70: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="638.0" cy="156.4" r="4"><title>Generation 71: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="646.0" cy="156.4" r="4"><title>Generation 72: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="654.0" cy="156.4" r="4"><title>Generation 73: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="662.0" cy="156.4" r="4"><title>Generation 74: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="670.0" cy="156.4" r="4"><title>Generation 75: 71.6% win rate, fitness 98861.0</title></circle>
+<circle cx="678.0" cy="154.8" r="4"><title>Generation 76: 72.0% win rate, fitness 100542.0</title></circle>
+<circle cx="686.0" cy="154.8" r="4"><title>Generation 77: 72.0% win rate, fitness 100542.0</title></circle>
+<circle cx="694.0" cy="149.1" r="4"><title>Generation 78: 73.4% win rate, fitness 104737.0</title></circle>
+<circle cx="702.0" cy="149.1" r="4"><title>Generation 79: 73.4% win rate, fitness 104737.0</title></circle>
+<circle cx="710.0" cy="149.1" r="4"><title>Generation 80: 73.4% win rate, fitness 104737.0</title></circle>
+<circle cx="718.0" cy="149.1" r="4"><title>Generation 81: 73.4% win rate, fitness 104737.0</title></circle>
+<circle cx="726.0" cy="149.1" r="4"><title>Generation 82: 73.4% win rate, fitness 104737.0</title></circle>
+<circle cx="734.0" cy="144.1" r="4"><title>Generation 83: 74.6% win rate, fitness 106934.0</title></circle>
+<circle cx="742.0" cy="144.1" r="4"><title>Generation 84: 74.6% win rate, fitness 106934.0</title></circle>
+<circle cx="750.0" cy="144.1" r="4"><title>Generation 85: 74.6% win rate, fitness 106934.0</title></circle>
+<circle cx="758.0" cy="144.1" r="4"><title>Generation 86: 74.6% win rate, fitness 106934.0</title></circle>
+<circle cx="766.0" cy="137.6" r="4"><title>Generation 87: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="774.0" cy="137.6" r="4"><title>Generation 88: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="782.0" cy="137.6" r="4"><title>Generation 89: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="790.0" cy="137.6" r="4"><title>Generation 90: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="798.0" cy="137.6" r="4"><title>Generation 91: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="806.0" cy="137.6" r="4"><title>Generation 92: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="814.0" cy="137.6" r="4"><title>Generation 93: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="822.0" cy="137.6" r="4"><title>Generation 94: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="830.0" cy="137.6" r="4"><title>Generation 95: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="838.0" cy="137.6" r="4"><title>Generation 96: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="846.0" cy="137.6" r="4"><title>Generation 97: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="854.0" cy="137.6" r="4"><title>Generation 98: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="862.0" cy="137.6" r="4"><title>Generation 99: 76.2% win rate, fitness 111957.0</title></circle>
+<circle cx="870.0" cy="137.6" r="4"><title>Generation 100: 76.2% win rate, fitness 111957.0</title></circle>
+  <text x="470" y="500" text-anchor="middle" font-size="14">Generation</text>
+  <text x="20" y="245" text-anchor="middle" font-size="14" transform="rotate(-90 20 245)">Win rate</text>
+</svg>

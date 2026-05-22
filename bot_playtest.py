@@ -473,6 +473,16 @@ def default_bot_strategies():
             convoy_bias=0.69,
             ship_bias=0.16,
         ),
+        BotStrategy(
+            name="Storm Reaver",
+            trade_weight=2.84,
+            raid_weight=3.95,
+            guard_weight=2.19,
+            fire_weight=4.61,
+            build_priority=[],
+            convoy_bias=0.32,
+            ship_bias=0.74,
+        ),
     ]
 
 
