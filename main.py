@@ -1,5 +1,5 @@
 class Rules:
-    VERSION = "0.10"
+    VERSION = "0.11"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -11,6 +11,11 @@ class Rules:
     SHIPYARD_ASSET_VALUE = 5
     FIRE_SHIP_UPGRADE_COST = 5
     PORT_ATTACK_SHIPS_REQUIRED = 5
+    FORT_COST = 10
+    FORT_LABOR_REQUIRED = 10
+    FORT_ASSET_VALUE = 10
+    FORT_PORT_DEFENSE = 5
+    FORT_FIRE_BLOCKS_PER_TURN = 1
     MAX_TURNS = 12
     MONTHS = [
         "January",
@@ -75,6 +80,10 @@ class Nation:
         self.shipyard_started = False
         self.shipyard_completed = False
         self.shipyard_labor = 0
+        self.fort_started = False
+        self.fort_completed = False
+        self.fort_labor = 0
+        self.fort_fire_blocks_remaining = 0
         self.fire_ships_unlocked = False
 
     def status_report(self):
@@ -82,6 +91,7 @@ class Nation:
         print(f"  Treasure route: {self.treasure_value} gold{self.treasure_status}")
         print(f"  Payroll: {self.payroll_status}")
         print(f"  Shipyard: {self.shipyard_status}")
+        print(f"  Fort: {self.fort_status}")
         print(f"  Fire ships: {self.fire_ship_status}")
 
     def buy_ships(self, amount):
@@ -96,6 +106,10 @@ class Nation:
     def unlock_fire_ships(self):
         self.gold -= Rules.FIRE_SHIP_UPGRADE_COST
         self.fire_ships_unlocked = True
+
+    def start_fort(self):
+        self.gold -= Rules.FORT_COST
+        self.fort_started = True
 
     def destroy_shipyard(self):
         self.shipyard_started = False
@@ -115,6 +129,32 @@ class Nation:
 
         return applied_labor
 
+    def add_fort_labor(self, labor):
+        if not self.fort_started or self.fort_completed or labor <= 0:
+            return 0
+
+        remaining_labor = Rules.FORT_LABOR_REQUIRED - self.fort_labor
+        applied_labor = min(labor, remaining_labor)
+        self.fort_labor += applied_labor
+
+        if self.fort_labor >= Rules.FORT_LABOR_REQUIRED:
+            self.fort_completed = True
+
+        return applied_labor
+
+    def reset_fort_fire_blocks(self):
+        if self.fort_completed:
+            self.fort_fire_blocks_remaining = Rules.FORT_FIRE_BLOCKS_PER_TURN
+        else:
+            self.fort_fire_blocks_remaining = 0
+
+    def block_shipyard_fire(self):
+        if self.fort_fire_blocks_remaining <= 0:
+            return False
+
+        self.fort_fire_blocks_remaining -= 1
+        return True
+
     @property
     def ship_cost(self):
         if self.shipyard_completed:
@@ -132,8 +172,14 @@ class Nation:
         return 0
 
     @property
+    def fort_value(self):
+        if self.fort_completed:
+            return Rules.FORT_ASSET_VALUE
+        return 0
+
+    @property
     def asset_score(self):
-        return self.gold + self.ship_value + self.shipyard_value
+        return self.gold + self.ship_value + self.shipyard_value + self.fort_value
 
     @property
     def has_treasure_at_sea(self):
@@ -175,6 +221,14 @@ class Nation:
             f"not started ({Rules.SHIPYARD_COST} gold, "
             f"{Rules.SHIPYARD_LABOR_REQUIRED} labor)"
         )
+
+    @property
+    def fort_status(self):
+        if self.fort_completed:
+            return "completed"
+        if self.fort_started:
+            return f"under construction, {self.fort_labor}/{Rules.FORT_LABOR_REQUIRED} labor"
+        return f"not started ({Rules.FORT_COST} gold, {Rules.FORT_LABOR_REQUIRED} labor)"
 
     @property
     def fire_ship_status(self):
@@ -263,7 +317,7 @@ class Game:
         self.resolve_orders()
         if self.game_over:
             return
-        self.apply_shipyard_labor()
+        self.apply_port_labor()
         self.advance_convoys()
         self.buy_phase()
 
@@ -281,7 +335,7 @@ class Game:
         player.status_report()
         print(
             f"  Asset score if game ended now: {player.asset_score} "
-            f"(shipyard value: {player.shipyard_value})"
+            f"(shipyard value: {player.shipyard_value}, fort value: {player.fort_value})"
         )
         print(
             f"  Trade income: {Rules.TRADE_INCOME} gold, "
@@ -344,6 +398,9 @@ class Game:
     def resolve_orders(self):
         print("\n=== RESOLUTION ===")
         player_one, player_two = self.players
+        for player in self.players:
+            player.reset_fort_fire_blocks()
+
         self.port_labor = {
             player: max(0, player.ships - player.allocation.total)
             for player in self.players
@@ -389,6 +446,7 @@ class Game:
 
         burned_guards = min(fire_strength, guard_strength)
         shipyard_attack = 0
+        blocked_fire = 0
 
         attacker.allocation.fire -= burned_guards
         defender.allocation.guard -= burned_guards
@@ -403,6 +461,17 @@ class Game:
             print(f" - {attacker.name} loses {burned_guards} fire ship(s).")
 
         if attacker.allocation.fire > 0 and defender.shipyard_started:
+            if defender.block_shipyard_fire():
+                blocked_fire = 1
+                attacker.allocation.fire -= blocked_fire
+                attacker.ships -= blocked_fire
+                print(
+                    f" - {defender.name}'s fort blocks 1 fire ship "
+                    "before it reaches the shipyard."
+                )
+                print(f" - {attacker.name} loses 1 fire ship.")
+
+        if attacker.allocation.fire > 0 and defender.shipyard_started:
             shipyard_attack = 1
             attacker.allocation.fire -= shipyard_attack
             attacker.ships -= shipyard_attack
@@ -413,7 +482,7 @@ class Game:
             )
             print(f" - {attacker.name} loses 1 fire ship.")
 
-        if burned_guards == 0 and shipyard_attack == 0:
+        if burned_guards == 0 and shipyard_attack == 0 and blocked_fire == 0:
             print(" - No guards or shipyard are in position. The fire ships withdraw.")
 
     def resolve_raid_guard_battle(self, raider, guarder):
@@ -471,7 +540,11 @@ class Game:
         if defender.ships > 0:
             return False
 
-        if attacker.allocation.raid < Rules.PORT_ATTACK_SHIPS_REQUIRED:
+        required_raids = Rules.PORT_ATTACK_SHIPS_REQUIRED
+        if defender.fort_completed:
+            required_raids += Rules.FORT_PORT_DEFENSE
+
+        if attacker.allocation.raid < required_raids:
             return False
 
         self.game_over = True
@@ -479,7 +552,8 @@ class Game:
         self.port_destroyed = defender
         print(
             f"\n{attacker.name} sends {attacker.allocation.raid} raid ship(s) "
-            f"against {defender.name}'s undefended home port."
+            f"against {defender.name}'s undefended home port "
+            f"({required_raids} required)."
         )
         print(f"{defender.name}'s home port is destroyed.")
         return True
@@ -558,17 +632,20 @@ class Game:
             treasure_growth=treasure_growth,
         )
 
-    def apply_shipyard_labor(self):
-        print("\n=== SHIPYARD LABOR ===")
+    def apply_port_labor(self):
+        print("\n=== PORT LABOR ===")
         any_labor = False
 
         for player in self.players:
             port_labor = self.port_labor.get(player, 0)
-            applied_labor = player.add_shipyard_labor(port_labor)
-            if applied_labor:
+            shipyard_labor = player.add_shipyard_labor(port_labor)
+            port_labor -= shipyard_labor
+            fort_labor = player.add_fort_labor(port_labor)
+
+            if shipyard_labor:
                 any_labor = True
                 print(
-                    f"{player.name} applies {applied_labor} labor to the shipyard "
+                    f"{player.name} applies {shipyard_labor} labor to the shipyard "
                     f"({player.shipyard_labor}/{Rules.SHIPYARD_LABOR_REQUIRED})."
                 )
                 if player.shipyard_completed:
@@ -576,11 +653,24 @@ class Game:
                         f"{player.name}'s shipyard is complete. "
                         f"Ships now cost {player.ship_cost} gold."
                     )
-            elif player.shipyard_started and not player.shipyard_completed:
+
+            if fort_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {fort_labor} labor to the fort "
+                    f"({player.fort_labor}/{Rules.FORT_LABOR_REQUIRED})."
+                )
+                if player.fort_completed:
+                    print(f"{player.name}'s fort is complete.")
+
+            if not shipyard_labor and player.shipyard_started and not player.shipyard_completed:
                 print(f"{player.name} has no idle ships to work on the shipyard.")
 
+            if not fort_labor and player.fort_started and not player.fort_completed:
+                print(f"{player.name} has no idle ships to work on the fort.")
+
         if not any_labor:
-            print("No shipyard labor is applied this turn.")
+            print("No port labor is applied this turn.")
 
     def advance_convoys(self):
         print("\n=== CONVOY ARRIVALS ===")
@@ -622,6 +712,7 @@ class Game:
         for player in self.players:
             self.show_player_economy(player)
             self.prompt_shipyard_start(player)
+            self.prompt_fort_start(player)
             self.prompt_fire_ship_upgrade(player)
             affordable = player.gold // player.ship_cost
 
@@ -713,6 +804,26 @@ class Game:
                 f"on future turns."
             )
 
+    def prompt_fort_start(self, player):
+        if player.fort_started:
+            return
+
+        if player.gold < Rules.FORT_COST:
+            print(
+                f"{player.name} cannot afford to start a fort "
+                f"({Rules.FORT_COST} gold needed)."
+            )
+            return
+
+        if self.prompt_yes_no(
+            f"{player.name}, start fort for {Rules.FORT_COST} gold? [y/N]: "
+        ):
+            player.start_fort()
+            print(
+                f"{player.name} starts a fort. Idle ships will add labor "
+                f"on future turns."
+            )
+
     def prompt_fire_ship_upgrade(self, player):
         if player.fire_ships_unlocked:
             return
@@ -741,7 +852,8 @@ class Game:
             print(
                 f"{player.name}: {player.gold} gold + "
                 f"{player.ships} ships ({player.ship_value} value) + "
-                f"shipyard ({player.shipyard_value} value) = "
+                f"shipyard ({player.shipyard_value} value) + "
+                f"fort ({player.fort_value} value) = "
                 f"{player.asset_score} total assets"
             )
 

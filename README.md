@@ -29,3 +29,12 @@
 - Raid-vs-guard battles now use overwhelming force.
 - A force at least 50% larger destroys up to 2 enemy ships in the encounter.
 - A force at least 100% larger destroys all enemy ships in the encounter.
+
+## Version 0.11
+
+- Forts can be started during the buy phase for 10 gold.
+- A fort requires 10 labor to complete.
+- Idle ships apply labor to shipyards first, then forts.
+- A completed fort blocks 1 shipyard-bound fire ship each turn.
+- A completed fort raises the raid force needed to destroy the home port from 5 to 10.
+- Completed forts count as 10 value in final asset scoring.
