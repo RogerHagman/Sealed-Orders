@@ -62,3 +62,11 @@
 - End-of-turn summaries show gold, ships, asset, and order ledgers.
 - Summaries include changed convoy, infrastructure, and fire ship plan statuses.
 - The summary appears after both players finish the buy phase.
+
+## Version 0.15
+
+- Added a non-interactive self-play tournament mode.
+- Run `python3 main.py --self-play 100` to let bot strategies play 100 games.
+- Add `--seed 1` for repeatable results while tuning strategies or rules.
+- The report ranks bot archetypes by win rate, average turns, average assets, and port wins.
+- Bot strategy and tournament code lives in `bot_playtest.py`.

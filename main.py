@@ -1,5 +1,8 @@
+import argparse
+
+
 class Rules:
-    VERSION = "0.14"
+    VERSION = "0.15"
     STARTING_GOLD = 5
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -1103,5 +1106,24 @@ def prompt_player_names():
 
 
 if __name__ == "__main__":
-    game = Game(prompt_player_names())
-    game.play()
+    parser = argparse.ArgumentParser(description="Play or simulate Sealed Orders.")
+    parser.add_argument(
+        "--self-play",
+        type=int,
+        metavar="GAMES",
+        help="run a non-interactive bot tournament for the given number of games",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="set the random seed for repeatable self-play results",
+    )
+    args = parser.parse_args()
+
+    if args.self_play is not None:
+        from bot_playtest import run_self_play
+
+        run_self_play(games=args.self_play, seed=args.seed)
+    else:
+        game = Game(prompt_player_names())
+        game.play()
