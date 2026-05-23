@@ -1,5 +1,6 @@
 import json
 import random
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -262,6 +263,8 @@ def train_evolving_strategy(
             plateau_generations = 0
             dashboard_message = "Press h for controls."
             recent_lines = []
+            plateau_reference_stats = None
+            training_events = deque(maxlen=100)
             if dashboard:
                 recent_lines.append(training_status_line(0, "initial", current_stats))
                 render_training_dashboard(
@@ -276,6 +279,8 @@ def train_evolving_strategy(
                     games_per_bot=games_per_bot,
                     plateau_generations=plateau_generations,
                     dashboard_message=dashboard_message,
+                    previous_stats=None,
+                    training_events=training_events,
                 )
             else:
                 print_evolving_strategy("Initial random strategy", current, current_stats)
@@ -290,6 +295,7 @@ def train_evolving_strategy(
             start_new_run = False
 
             for generation in range(1, generations + 1):
+                incumbent_stats = dict(current_stats)
                 if dashboard:
                     command_result = handle_dashboard_input(
                         current,
@@ -317,6 +323,8 @@ def train_evolving_strategy(
                         break
                     if dashboard_command == "restart":
                         plateau_generations = 0
+                        plateau_reference_stats = None
+                        training_events.clear()
                         recent_lines.append(
                             training_status_line(generation - 1, "restart", current_stats)
                         )
@@ -333,12 +341,15 @@ def train_evolving_strategy(
                             games_per_bot=games_per_bot,
                             plateau_generations=plateau_generations,
                             dashboard_message=dashboard_message,
+                            previous_stats=None,
+                            training_events=training_events,
                         )
 
                 candidate = mutate_strategy(current, rng, mutation_scale)
                 candidate_stats = evaluate_strategy(candidate, opponents, games_per_bot, rng)
+                candidate_improved = candidate_stats["fitness"] > current_stats["fitness"]
 
-                if candidate_stats["fitness"] > current_stats["fitness"]:
+                if candidate_improved:
                     if not passes_robustness_gate(current_stats, candidate_stats):
                         status = "fragile"
                     else:
@@ -358,8 +369,15 @@ def train_evolving_strategy(
 
                 if status == "learned":
                     plateau_generations = 0
+                    plateau_reference_stats = incumbent_stats
                 else:
                     plateau_generations += 1
+                training_events.append(
+                    {
+                        "status": status,
+                        "candidate_improved": candidate_improved,
+                    }
+                )
 
                 status_line = training_status_line(generation, status, current_stats)
                 recent_lines.append(status_line)
@@ -377,6 +395,8 @@ def train_evolving_strategy(
                         games_per_bot=games_per_bot,
                         plateau_generations=plateau_generations,
                         dashboard_message=dashboard_message,
+                        previous_stats=plateau_reference_stats,
+                        training_events=training_events,
                     )
                 else:
                     print(status_line)
@@ -407,6 +427,8 @@ def train_evolving_strategy(
                     games_per_bot=games_per_bot,
                     plateau_generations=plateau_generations,
                     benchmark_games=dashboard_benchmark_games,
+                    previous_stats=plateau_reference_stats,
+                    training_events=training_events,
                     benchmark_callback=lambda active_games: benchmark_strategy(
                         current,
                         opponents,

@@ -219,6 +219,11 @@
 - Dry docks still require a completed shipyard, but now cost 2 gold and require 1 labor.
 - Training and dashboard stats now track guard-captain smuggling ship captures.
 
+## Version 0.42
+
+- Raid fatigue now damages 1 ship every 5 lifetime raid ship actions instead of every 10.
+- Completed shipyards now reduce damaged-ship repair cost to 2 gold instead of 1; completed dry docks still make raid repairs free.
+
 ## Bot Meta Notes
 
 ### Human Shadow

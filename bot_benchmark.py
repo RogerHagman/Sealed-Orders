@@ -39,6 +39,8 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
         "port_wins": 0,
         "port_losses": 0,
         "turns_total": 0,
+        "win_turns_total": 0,
+        "loss_turns_total": 0,
         "score_total": 0,
         "opponent_score_total": 0,
     }
@@ -64,12 +66,14 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
 
         if result["winner_index"] == strategy_index:
             stats["wins"] += 1
+            stats["win_turns_total"] += result["turns"]
             if result["win_type"] == "port":
                 stats["port_wins"] += 1
         elif result["winner_index"] is None:
             stats["draws"] += 1
         else:
             stats["losses"] += 1
+            stats["loss_turns_total"] += result["turns"]
             if result["win_type"] == "port":
                 stats["port_losses"] += 1
 
@@ -79,11 +83,11 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
 def print_strategy_benchmark(rows):
     print(
         "\nOpponent         Games  Wins  Losses  Draws  Win rate  "
-        "Port wins  Port losses  Avg turns  Avg assets  Opp avg"
+        "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg"
     )
     print(
         "---------------  -----  ----  ------  -----  --------  "
-        "---------  -----------  ---------  ----------  -------"
+        "---------  -----------  ---------  ---------  ----------  ----------  -------"
     )
 
     totals = defaultdict(int)
@@ -97,6 +101,8 @@ def print_strategy_benchmark(rows):
             "port_wins",
             "port_losses",
             "turns_total",
+            "win_turns_total",
+            "loss_turns_total",
             "score_total",
             "opponent_score_total",
         ]:
@@ -111,6 +117,8 @@ def print_strategy_benchmark_row(row):
     games = row["games"]
     win_rate = row["wins"] / games if games else 0
     avg_turns = row["turns_total"] / games if games else 0
+    avg_win_turns = row["win_turns_total"] / row["wins"] if row["wins"] else 0
+    avg_loss_turns = row["loss_turns_total"] / row["losses"] if row["losses"] else 0
     avg_score = row["score_total"] / games if games else 0
     avg_opponent_score = row["opponent_score_total"] / games if games else 0
 
@@ -119,6 +127,7 @@ def print_strategy_benchmark_row(row):
         f"{row['losses']:>6}  {row['draws']:>5}  "
         f"{win_rate * 100:>7.1f}%  {row['port_wins']:>9}  "
         f"{row['port_losses']:>11}  {avg_turns:>9.1f}  "
+        f"{avg_win_turns:>9.1f}  {avg_loss_turns:>10.1f}  "
         f"{avg_score:>10.1f}  {avg_opponent_score:>7.1f}"
     )
 
@@ -149,6 +158,8 @@ def write_strategy_benchmark_csv(rows, output_path):
         "port_wins",
         "port_losses",
         "avg_turns",
+        "avg_win_turns",
+        "avg_loss_turns",
         "avg_assets",
         "avg_opponent_assets",
     ]
@@ -167,6 +178,8 @@ def write_strategy_benchmark_csv(rows, output_path):
                 row["port_wins"],
                 row["port_losses"],
                 f"{row['turns_total'] / games if games else 0:.6f}",
+                f"{row['win_turns_total'] / row['wins'] if row['wins'] else 0:.6f}",
+                f"{row['loss_turns_total'] / row['losses'] if row['losses'] else 0:.6f}",
                 f"{row['score_total'] / games if games else 0:.6f}",
                 f"{row['opponent_score_total'] / games if games else 0:.6f}",
             ]
