@@ -209,9 +209,9 @@ class BotStrategy:
                 if rng.random() < self.fishing_boat_bias:
                     reserve = self.gold_reserve(game, player, opponent)
                     boat_budget = max(0, player.gold - reserve)
-                    affordable = boat_budget // Rules.FISHING_BOAT_COST
+                    affordable = game.affordable_fishing_boats(player, boat_budget)
                     if affordable > 0:
-                        player.buy_fishing_boats(affordable)
+                        game.buy_fishing_boats(player, affordable)
 
         if self.should_launch_payroll(game, player, rng):
             player.launch_payroll()
@@ -302,9 +302,9 @@ class BotStrategy:
                 player.build_or_repair_fishing_dock()
         elif action == "buy_fishing_boats":
             if game.buy_fishing_boats_disabled_reason(player) is None:
-                affordable = player.gold // Rules.FISHING_BOAT_COST
+                affordable = game.affordable_fishing_boats(player)
                 if affordable > 0:
-                    player.buy_fishing_boats(affordable)
+                    game.buy_fishing_boats(player, affordable)
         elif action == "buy_ships":
             affordable = player.gold // player.ship_cost
             if affordable > 0:
@@ -383,6 +383,7 @@ class BotStrategy:
                 player.shipyard_started and not player.shipyard_completed,
                 player.fort_started and not player.fort_completed,
                 player.trade_guild_started and not player.trade_guild_completed,
+                player.fishing_dock_started and not player.fishing_dock_built,
             ]
         )
 
@@ -723,6 +724,8 @@ def player_record(player):
         "fort_completed": player.fort_completed,
         "trade_guild_started": player.trade_guild_started,
         "trade_guild_completed": player.trade_guild_completed,
+        "fishing_dock_started": player.fishing_dock_started,
+        "fishing_dock_labor": player.fishing_dock_labor,
         "fishing_dock_built": player.fishing_dock_built,
         "fishing_dock_disabled": player.fishing_dock_disabled,
         "fishing_boats": player.fishing_boats,
@@ -1056,12 +1059,60 @@ def default_bot_strategies():
             construction_idle_bias=0.69,
         ),
         BotStrategy(
+            name="Harbor Harvest",
+            trade_weight=0.17,
+            raid_weight=4.88,
+            guard_weight=2.10,
+            fire_weight=0.22,
+            build_priority=[
+                "fishing_dock",
+                "shipyard",
+                "fire_plans",
+                "fishing_boat",
+            ],
+            convoy_bias=0.00,
+            ship_bias=0.40,
+            shipyard_bias=0.07,
+            fort_bias=0.74,
+            trade_guild_bias=0.29,
+            fishing_dock_bias=1.00,
+            fishing_boat_bias=0.99,
+            guard_captain_bias=0.41,
+            fire_plans_bias=0.34,
+            construction_idle_bias=0.61,
+        ),
+        BotStrategy(
+            name="Reef Tyrant",
+            trade_weight=0.19,
+            raid_weight=4.66,
+            guard_weight=0.01,
+            fire_weight=0.27,
+            build_priority=[
+                "fishing_boat",
+                "fort",
+                "fishing_dock",
+                "shipyard",
+                "fire_plans",
+                "trade_guild",
+            ],
+            convoy_bias=0.00,
+            ship_bias=0.80,
+            shipyard_bias=0.04,
+            fort_bias=0.24,
+            trade_guild_bias=0.06,
+            fishing_dock_bias=0.91,
+            fishing_boat_bias=0.70,
+            guard_captain_bias=0.10,
+            fire_plans_bias=0.94,
+            construction_idle_bias=0.72,
+        ),
+        BotStrategy(
             name="The Red Tide",
             trade_weight=0.33,
             raid_weight=4.89,
             guard_weight=0.00,
             fire_weight=1.41,
-            build_priority=['shipyard'],
+            build_priority=["shipyard"],
             convoy_bias=0.00,
             ship_bias=0.85,
             shipyard_bias=0.25,

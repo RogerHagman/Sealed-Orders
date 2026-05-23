@@ -171,10 +171,20 @@
 ## Version 0.32
 
 - Added fishing docks as a cheap domestic economy upgrade.
+- Fishing docks cost 3 gold and require 1 labor to complete.
 - Fishing boats cost 2 gold each and produce 1 domestic gold per turn while docks are active.
 - Fishing boats are not assignable ships and do not defend the home port.
 - Fire ships can disable active fishing docks after shipyard targeting; boats survive but produce no income until the docks are repaired.
 - Evolving strategies now learn fishing dock and fishing boat buy biases.
+
+## Version 0.33
+
+- Added `Harbor Harvest`, the v19 fishing-raider economy bot, to the default bot roster.
+- Added `Reef Tyrant`, the v22 fishing-pressure hybrid, to the default bot roster.
+- The default roster now includes an evolved bot that pairs heavy raid pressure with fishing dock snowballing.
+- Added `--max-turns` as an experimental game-length override; omit it to keep the normal 12-turn game.
+- Use `--max-turns 24` with self-play, training, or strategy benchmarks to test longer economic games.
+- Fishing dock construction and repair now require 1 labor; boats remain gold-only once docks are active.
 
 ## Bot Meta Notes
 
@@ -194,3 +204,17 @@
 - The strategy avoids early treasure launches because evolved play sees at-sea treasure as too vulnerable against raid-heavy bots.
 - It also underbuilds shipyards because immediate port pressure outperforms compounding economy against the current opponent roster.
 - The human counterexample in the log shows the pressure point: launch treasure early, guard through the first raids, start shipyard, let Red Tide run out of ships, then convert the economic lead into a port kill.
+
+### Harbor Harvest
+
+- `Harbor Harvest` is the v19 evolved fishing-raider profile.
+- Its benchmark strength comes from suppressing opponents with heavy raids while turning safe gold into fishing docks and boats.
+- It is a strong generalist against the current roster, but it remains meaningfully exploitable by dedicated port-pressure plans such as `The Red Tide`.
+- Its high fort and guard captain biases rarely fire because fishing boats sit earlier in the build order and consume most spare gold.
+
+### Reef Tyrant
+
+- `Reef Tyrant` is the v22 evolved profile for the current fishing-dock labor and trade-guild rules.
+- It combines overwhelming raid pressure with frequent fishing docks, enough boats to snowball, and occasional fort/captain support.
+- Its benchmark strength comes from winning by both port pressure and asset growth, rather than collapsing into a pure port-rush or pure fishing economy.
+- `The Red Tide` remains its main predator in the current roster, which keeps the profile from looking solved.

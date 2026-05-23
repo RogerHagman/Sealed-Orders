@@ -2,6 +2,9 @@ import argparse
 import os
 import sys
 
+if __name__ == "__main__":
+    sys.modules["main"] = sys.modules[__name__]
+
 
 class UI:
     enabled = sys.stdout.isatty() and "NO_COLOR" not in os.environ
@@ -79,8 +82,8 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.32"
-    STARTING_GOLD = 5
+    VERSION = "0.33"
+    STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
     SMUGGLE_INCOME = 1
@@ -93,19 +96,20 @@ class Rules:
     PORT_ATTACK_SHIPS_REQUIRED = 5
     FORT_COST = 10
     FORT_LABOR_REQUIRED = 5
-    FORT_ASSET_VALUE = 10
+    FORT_ASSET_VALUE = 15
     FORT_PORT_DEFENSE = 10
     FORT_FIRE_BLOCKS_PER_TURN = 1
     FORT_RAID_BLOCKS_PER_TURN = 2
-    GUARD_CAPTAIN_COST = 3
+    GUARD_CAPTAIN_COST = 2
     GUARD_CAPTAIN_MAX = 5
     GUARD_CAPTAIN_PORT_DEFENSE = 1
     GUARD_CAPTAIN_CONFISCATIONS_PER_TURN = 1
     TRADE_GUILD_COST = 6
     TRADE_GUILD_LABOR_REQUIRED = 4
     TRADE_GUILD_ASSET_VALUE = 8
-    TRADE_GUILD_BONUS_STEP = 3
+    TRADE_GUILD_BONUS_STEP = 2
     FISHING_DOCK_COST = 3
+    FISHING_DOCK_LABOR_REQUIRED = 1
     FISHING_DOCK_ASSET_VALUE = 3
     FISHING_BOAT_COST = 2
     FISHING_BOAT_INCOME = 1
@@ -135,6 +139,12 @@ class Rules:
     PAYROLL_COST_PER_SHIP = 1
     PAYROLL_MUTINY_PERCENT = 0.25
     TRADE_GUILD_PAYROLL_DISCOUNT_PERCENT = 25
+
+    @classmethod
+    def set_max_turns(cls, max_turns):
+        if max_turns < 1:
+            raise ValueError("maximum turns must be at least 1")
+        cls.MAX_TURNS = max_turns
 
 
 class Allocation:
@@ -194,6 +204,8 @@ class Nation:
         self.trade_guild_labor = 0
         self.fire_ships_unlocked = False
         self.guard_captains = 0
+        self.fishing_dock_started = False
+        self.fishing_dock_labor = 0
         self.fishing_dock_built = False
         self.fishing_dock_disabled = False
         self.fishing_boats = 0
@@ -244,12 +256,33 @@ class Nation:
 
     def build_or_repair_fishing_dock(self):
         self.gold -= Rules.FISHING_DOCK_COST
-        self.fishing_dock_built = True
-        self.fishing_dock_disabled = False
+        if self.fishing_dock_disabled:
+            self.fishing_dock_disabled = False
+            self.fishing_dock_built = False
+            self.fishing_dock_started = True
+            self.fishing_dock_labor = 0
+        else:
+            self.fishing_dock_started = True
 
     def buy_fishing_boats(self, amount):
         self.gold -= amount * Rules.FISHING_BOAT_COST
         self.fishing_boats += amount
+
+    def add_fishing_dock_labor(self, available_labor):
+        if (
+            not self.fishing_dock_started
+            or self.fishing_dock_built
+            or self.fishing_dock_disabled
+        ):
+            return 0
+
+        needed = Rules.FISHING_DOCK_LABOR_REQUIRED - self.fishing_dock_labor
+        labor = min(available_labor, needed)
+        self.fishing_dock_labor += labor
+        if self.fishing_dock_labor >= Rules.FISHING_DOCK_LABOR_REQUIRED:
+            self.fishing_dock_built = True
+            self.fishing_dock_started = False
+        return labor
 
     def start_fort(self):
         self.gold -= Rules.FORT_COST
@@ -268,6 +301,8 @@ class Nation:
         if not self.fishing_dock_built or self.fishing_dock_disabled:
             return False
         self.fishing_dock_disabled = True
+        self.fishing_dock_started = False
+        self.fishing_dock_labor = 0
         return True
 
     def add_shipyard_labor(self, labor):
@@ -461,8 +496,16 @@ class Nation:
 
     @property
     def fishing_status(self):
+        if self.fishing_dock_started and not self.fishing_dock_built:
+            return (
+                f"docks under construction, {self.fishing_dock_labor}/"
+                f"{Rules.FISHING_DOCK_LABOR_REQUIRED} labor, 0 boats"
+            )
         if not self.fishing_dock_built:
-            return f"no docks ({Rules.FISHING_DOCK_COST} gold), 0 boats"
+            return (
+                f"no docks ({Rules.FISHING_DOCK_COST} gold, "
+                f"{Rules.FISHING_DOCK_LABOR_REQUIRED} labor), 0 boats"
+            )
         if self.fishing_dock_disabled:
             return (
                 f"docks disabled ({Rules.FISHING_DOCK_COST} gold repair), "
@@ -555,7 +598,7 @@ class Game:
     def play(self):
         UI.section(f"SEALED ORDERS v{Rules.VERSION}", "magenta")
         UI.bullet("Assign ships to Trade, Raid, Guard, and Fire.", "cyan")
-        UI.bullet("Highest total assets after 12 months wins.", "yellow")
+        UI.bullet(f"Highest total assets after {Rules.MAX_TURNS} turns wins.", "yellow")
         UI.bullet("Treasure and payroll convoys create delayed, raidable payouts.")
         UI.bullet("Idle ships can finish shipyards, forts, and trade guilds.")
         UI.bullet("Fire ships and guard captains are buy-phase upgrades.")
@@ -659,7 +702,11 @@ class Game:
 
     @property
     def current_month(self):
-        return Rules.MONTHS[self.turn - 1]
+        month = Rules.MONTHS[(self.turn - 1) % len(Rules.MONTHS)]
+        year = ((self.turn - 1) // len(Rules.MONTHS)) + 1
+        if year == 1:
+            return month
+        return f"{month}, Year {year}"
 
     def show_player_economy(self, player):
         UI.section(f"{player.name}'s Economy - {self.current_month}", "blue")
@@ -681,6 +728,7 @@ class Game:
         )
         print(
             f"  {UI.field('Fishing')} Docks: {Rules.FISHING_DOCK_COST} gold, "
+            f"{Rules.FISHING_DOCK_LABOR_REQUIRED} labor; "
             f"boats: {Rules.FISHING_BOAT_COST} gold each"
         )
         if not player.payroll_launched:
@@ -1078,6 +1126,8 @@ class Game:
             fort_labor = player.add_fort_labor(port_labor)
             port_labor -= fort_labor
             trade_guild_labor = player.add_trade_guild_labor(port_labor)
+            port_labor -= trade_guild_labor
+            fishing_dock_labor = player.add_fishing_dock_labor(port_labor)
 
             if shipyard_labor:
                 any_labor = True
@@ -1110,6 +1160,19 @@ class Game:
                 if player.trade_guild_completed:
                     print(f"{player.name}'s trade guild is complete.")
 
+            if fishing_dock_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {fishing_dock_labor} labor to the "
+                    f"fishing docks ({player.fishing_dock_labor}/"
+                    f"{Rules.FISHING_DOCK_LABOR_REQUIRED})."
+                )
+                if player.fishing_dock_built:
+                    print(
+                        f"{player.name}'s fishing docks are complete. "
+                        "Fishing boats can now be bought."
+                    )
+
             if not shipyard_labor and player.shipyard_started and not player.shipyard_completed:
                 print(f"{player.name} has no idle ships to work on the shipyard.")
 
@@ -1122,6 +1185,13 @@ class Game:
                 and not player.trade_guild_completed
             ):
                 print(f"{player.name} has no idle ships to work on the trade guild.")
+
+            if (
+                not fishing_dock_labor
+                and player.fishing_dock_started
+                and not player.fishing_dock_built
+            ):
+                print(f"{player.name} has no idle ships to work on the fishing docks.")
 
         if not any_labor:
             print("No port labor is applied this turn.")
@@ -1314,6 +1384,8 @@ class Game:
     def fishing_dock_disabled_reason(self, player):
         if player.fishing_dock_built and not player.fishing_dock_disabled:
             return "already active"
+        if player.fishing_dock_started and not player.fishing_dock_built:
+            return "already under construction"
         if player.gold < Rules.FISHING_DOCK_COST:
             return f"too expensive ({Rules.FISHING_DOCK_COST} gold needed)"
         return None
@@ -1407,12 +1479,12 @@ class Game:
             print(UI.success(f"{player.name} repairs the fishing docks."))
         else:
             print(UI.success(
-                f"{player.name} builds fishing docks. "
-                "Fishing boats can now be bought."
+                f"{player.name} starts fishing docks. Idle ships will add labor "
+                "on future turns."
             ))
 
     def buy_fishing_boats_action(self, player):
-        affordable = player.gold // Rules.FISHING_BOAT_COST
+        affordable = self.affordable_fishing_boats(player)
 
         while True:
             amount = self.prompt_non_negative_int(
@@ -1422,7 +1494,7 @@ class Game:
             )
 
             if amount <= affordable:
-                player.buy_fishing_boats(amount)
+                self.buy_fishing_boats(player, amount)
                 if amount:
                     print(UI.success(
                         f"{player.name} buys {amount} fishing boat(s)."
@@ -1434,6 +1506,14 @@ class Game:
             print(UI.warning(
                 f"{player.name} can only afford {affordable} fishing boat(s)."
             ))
+
+    def affordable_fishing_boats(self, player, gold_budget=None):
+        if gold_budget is None:
+            gold_budget = player.gold
+        return max(0, gold_budget // Rules.FISHING_BOAT_COST)
+
+    def buy_fishing_boats(self, player, amount):
+        player.buy_fishing_boats(amount)
 
     def launch_treasure_action(self, player):
         player.launch_treasure()
@@ -1624,7 +1704,18 @@ if __name__ == "__main__":
         type=int,
         help="set the random seed for repeatable self-play results",
     )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        help="experimental override for game length; default is 12",
+    )
     args = parser.parse_args()
+
+    if args.max_turns is not None:
+        try:
+            Rules.set_max_turns(args.max_turns)
+        except ValueError as error:
+            parser.error(str(error))
 
     if args.evaluate_strategy is not None:
         from bot_playtest import evaluate_strategy_file
