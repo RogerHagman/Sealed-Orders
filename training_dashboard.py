@@ -1,5 +1,7 @@
 import os
+import re
 import select
+import shutil
 import sys
 import termios
 import tty
@@ -32,6 +34,53 @@ def paint(text, color=None, bold=False):
     if not codes:
         return text
     return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+
+ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visible_len(text):
+    return len(ANSI_RE.sub("", str(text)))
+
+
+def fit_panel_line(text, width):
+    text = str(text)
+    content_width = max(1, width - 4)
+    if visible_len(text) > content_width:
+        plain = ANSI_RE.sub("", text)
+        text = plain[: max(0, content_width - 3)] + "..."
+    return f"| {text}{' ' * max(0, content_width - visible_len(text))} |"
+
+
+def panel(title, lines, width):
+    width = max(24, width)
+    title_text = f" {title} "
+    top_fill = max(0, width - visible_len(title_text) - 2)
+    top = "+" + title_text + "-" * top_fill + "+"
+    body = [fit_panel_line(line, width) for line in lines]
+    bottom = "+" + "-" * (width - 2) + "+"
+    return [top, *body, bottom]
+
+
+def combine_panels(left, right, gap=2):
+    height = max(len(left), len(right))
+    left_width = max(visible_len(line) for line in left) if left else 0
+    right_width = max(visible_len(line) for line in right) if right else 0
+    rows = []
+    for index in range(height):
+        left_line = left[index] if index < len(left) else " " * left_width
+        right_line = right[index] if index < len(right) else " " * right_width
+        rows.append(
+            f"{left_line}{' ' * max(0, left_width - visible_len(left_line) + gap)}{right_line}"
+        )
+    return rows
+
+
+def pad_panel_height(lines, width, target_height):
+    lines = list(lines)
+    while len(lines) < target_height and len(lines) >= 2:
+        lines.insert(-1, fit_panel_line("", width))
+    return lines
 
 
 def rate_color(rate):
@@ -527,102 +576,138 @@ def render_training_dashboard(
         window["candidate_pressure_color"],
         bold=window["candidate_pressure_label"] in {"frozen", "healthy", "noisy"},
     )
-    print(
-        f"status={paint(status, status_color, bold=bool(status_color))}  "
-        f"plateau={paint(f'{plateau_status}({plateau_generations})', plateau_color(plateau_generations), bold=plateau_generations >= 100)}  "
-        f"health={paint(health_label, health_color, bold=True)}  "
-        f"fitness={stats['fitness']:.1f}"
-        f"{delta_text(stats['fitness'], previous_stats['fitness'] if previous_stats else None, precision=1)}  "
-        f"wins={stats['wins']}/{stats['games']} "
-        f"{paint(f'{win_rate * 100:.1f}%', rate_color(win_rate), bold=True)}"
-        f"{delta_text(win_rate * 100, previous_win_rate * 100 if previous_win_rate is not None else None, precision=1, suffix='%')}  "
-        f"min={paint(f'{min_matchup * 100:.1f}%', rate_color(min_matchup), bold=True)}"
-        f"{delta_text(min_matchup * 100, previous_min_matchup * 100 if previous_min_matchup is not None else None, precision=1, suffix='%')}  "
-        f"assets={avg_assets:.1f}"
-        f"{delta_text(avg_assets, previous_assets, precision=1)}  "
-        f"opp={average(stats, 'opponent_score_total'):.1f}"
-        f"{delta_text(average(stats, 'opponent_score_total'), previous_opp_assets, precision=1, lower_is_better=True)}"
+    terminal = shutil.get_terminal_size((120, 36))
+    width = max(80, terminal.columns)
+    content_width = min(width, 150)
+    left_width = max(38, (content_width - 2) // 2)
+    right_width = content_width - left_width - 2
+
+    status_lines = [
+        (
+            f"status={paint(status, status_color, bold=bool(status_color))}  "
+            f"plateau={paint(f'{plateau_status}({plateau_generations})', plateau_color(plateau_generations), bold=plateau_generations >= 100)}  "
+            f"health={paint(health_label, health_color, bold=True)}  "
+            f"message={paint(dashboard_message, 'white')}"
+        ),
+        (
+            f"fitness={stats['fitness']:.1f}"
+            f"{delta_text(stats['fitness'], previous_stats['fitness'] if previous_stats else None, precision=1)}  "
+            f"wins={stats['wins']}/{stats['games']} "
+            f"{paint(f'{win_rate * 100:.1f}%', rate_color(win_rate), bold=True)}"
+            f"{delta_text(win_rate * 100, previous_win_rate * 100 if previous_win_rate is not None else None, precision=1, suffix='%')}  "
+            f"min={paint(f'{min_matchup * 100:.1f}%', rate_color(min_matchup), bold=True)}"
+            f"{delta_text(min_matchup * 100, previous_min_matchup * 100 if previous_min_matchup is not None else None, precision=1, suffix='%')}"
+        ),
+        (
+            f"assets={avg_assets:.1f}"
+            f"{delta_text(avg_assets, previous_assets, precision=1)}  "
+            f"opp={average(stats, 'opponent_score_total'):.1f}"
+            f"{delta_text(average(stats, 'opponent_score_total'), previous_opp_assets, precision=1, lower_is_better=True)}  "
+            f"ports={paint(str(stats['ports']), 'green' if stats['ports'] else None)}  "
+            f"{port_losses_text}"
+            f"{delta_text(port_loss_rate * 100, stat_rate(previous_stats, 'port_losses') * 100 if previous_stats else None, precision=1, suffix='pp', lower_is_better=True)}"
+        ),
+        (
+            f"lr={learning_rate:.2f}  mutation={mutation_scale:.2f}  "
+            f"games/opponent={games_per_bot}"
+        ),
+        (
+            f"win {gauge(win_rate, 0, 1)}  "
+            f"min {gauge(min_matchup, 0, 1)}  "
+            f"plateau {inverse_gauge(min(plateau_generations, 100), 0, 100)}"
+        ),
+    ]
+
+    training_lines = [
+        f"window n={window['total']}  mode={paint(window['mode'], window['color'], bold=True)}",
+        f"yield={yield_text}  candidate={candidate_pressure_text}",
+        f"fragility={fragility_text}",
+        f"learned/fragile/kept={window['learned']}/{window['fragile']}/{window['kept']}",
+        (
+            f"damage={average(stats, 'raid_damage_events_total'):.1f}/game"
+            f"{delta_text(average(stats, 'raid_damage_events_total'), average(previous_stats, 'raid_damage_events_total') if previous_stats else None, precision=1, lower_is_better=True)}"
+        ),
+        (
+            f"repairs={average(stats, 'raid_repairs_total'):.1f}/game"
+            f"{delta_text(average(stats, 'raid_repairs_total'), average(previous_stats, 'raid_repairs_total') if previous_stats else None, precision=1)}"
+        ),
+        (
+            f"sunk damaged={average(stats, 'damaged_raiders_sunk_total'):.1f}/game"
+            f"{delta_text(average(stats, 'damaged_raiders_sunk_total'), average(previous_stats, 'damaged_raiders_sunk_total') if previous_stats else None, precision=1, lower_is_better=True)}"
+        ),
+        (
+            f"smugglers={average(stats, 'guard_captain_ship_captures_total'):.1f}/game"
+            f"{delta_text(average(stats, 'guard_captain_ship_captures_total'), average(previous_stats, 'guard_captain_ship_captures_total') if previous_stats else None, precision=1)}"
+        ),
+    ]
+    strategy_lines = [
+        (
+            f"orders  trade={strategy.trade_weight:.2f}  raid={strategy.raid_weight:.2f}  "
+            f"guard={strategy.guard_weight:.2f}  fire={strategy.fire_weight:.2f}"
+        ),
+        (
+            f"buy     convoy={strategy.convoy_bias:.2f}  ship={strategy.ship_bias:.2f}  "
+            f"idle={strategy.construction_idle_bias:.2f}  repair={strategy.repair_bias:.2f}"
+        ),
+        (
+            f"infra   yard={strategy.shipyard_bias:.2f}  fort={strategy.fort_bias:.2f}  "
+            f"guild={strategy.trade_guild_bias:.2f}"
+        ),
+        (
+            f"        captain={strategy.guard_captain_bias:.2f}  "
+            f"fire_plans={strategy.fire_plans_bias:.2f}"
+        ),
+        (
+            f"econ    fishing_dock={strategy.fishing_dock_bias:.2f}  "
+            f"boat={strategy.fishing_boat_bias:.2f}  dry_dock={strategy.dry_dock_bias:.2f}"
+        ),
+        f"priority {strategy.build_priority}",
+    ]
+    control_text = (
+        "b benchmark  w write file  s save+exit  n new run"
+        if finished
+        else "[] lr  -/+ mutation  g/G games  r restart  n new run  h help"
     )
-    print(
-        f"{paint('knobs:', 'blue', bold=True)} "
-        f"lr={learning_rate:.2f}  mutation={mutation_scale:.2f}  "
-        f"games/opponent={games_per_bot}  "
-        f"message={paint(dashboard_message, 'white')}"
-    )
-    print(
-        f"{paint('gauges:', 'blue', bold=True)} win {gauge(win_rate, 0, 1)}  "
-        f"min {gauge(min_matchup, 0, 1)}  "
-        f"plateau {inverse_gauge(min(plateau_generations, 100), 0, 100)}"
-    )
-    print(
-        f"{paint('window:', 'blue', bold=True)} "
-        f"n={window['total']}  "
-        f"yield={yield_text}  "
-        f"fragility={fragility_text}  "
-        f"candidate_pressure={candidate_pressure_text}  "
-        f"learned/fragile/kept={window['learned']}/{window['fragile']}/{window['kept']}  "
-        f"mode={paint(window['mode'], window['color'], bold=True)}"
-    )
-    print(
-        f"ports={paint(str(stats['ports']), 'green' if stats['ports'] else None)}  "
-        f"{port_losses_text}"
-        f"{delta_text(port_loss_rate * 100, stat_rate(previous_stats, 'port_losses') * 100 if previous_stats else None, precision=1, suffix='pp', lower_is_better=True)}  "
-        f"damage={average(stats, 'raid_damage_events_total'):.1f}/game"
-        f"{delta_text(average(stats, 'raid_damage_events_total'), average(previous_stats, 'raid_damage_events_total') if previous_stats else None, precision=1, lower_is_better=True)}  "
-        f"repairs={average(stats, 'raid_repairs_total'):.1f}/game"
-        f"{delta_text(average(stats, 'raid_repairs_total'), average(previous_stats, 'raid_repairs_total') if previous_stats else None, precision=1)}  "
-        f"sunk_damaged={average(stats, 'damaged_raiders_sunk_total'):.1f}/game"
-        f"{delta_text(average(stats, 'damaged_raiders_sunk_total'), average(previous_stats, 'damaged_raiders_sunk_total') if previous_stats else None, precision=1, lower_is_better=True)}  "
-        f"smugglers={average(stats, 'guard_captain_ship_captures_total'):.1f}/game"
-        f"{delta_text(average(stats, 'guard_captain_ship_captures_total'), average(previous_stats, 'guard_captain_ship_captures_total') if previous_stats else None, precision=1)}"
-    )
-    print()
-    print(
-        f"{paint('orders:', 'blue', bold=True)} "
-        f"trade={strategy.trade_weight:.2f}  "
-        f"raid={strategy.raid_weight:.2f}  "
-        f"guard={strategy.guard_weight:.2f}  "
-        f"fire={strategy.fire_weight:.2f}"
-    )
-    print(
-        f"{paint('buy:', 'blue', bold=True):<15}"
-        f"convoy={strategy.convoy_bias:.2f}  "
-        f"ship={strategy.ship_bias:.2f}  "
-        f"idle={strategy.construction_idle_bias:.2f}  "
-        f"repair={strategy.repair_bias:.2f}"
-    )
-    print(
-        f"{paint('infra:', 'blue', bold=True):<15}"
-        f"yard={strategy.shipyard_bias:.2f}  "
-        f"fort={strategy.fort_bias:.2f}  "
-        f"guild={strategy.trade_guild_bias:.2f}  "
-        f"captain={strategy.guard_captain_bias:.2f}  "
-        f"fire_plans={strategy.fire_plans_bias:.2f}"
-    )
-    print(
-        f"{paint('econ:', 'blue', bold=True):<15}"
-        f"fishing_dock={strategy.fishing_dock_bias:.2f}  "
-        f"boat={strategy.fishing_boat_bias:.2f}  "
-        f"dry_dock={strategy.dry_dock_bias:.2f}"
-    )
-    print(f"priority: {strategy.build_priority}")
-    print()
+
+    report_lines = []
     if finished:
-        print(paint("controls:", "magenta", bold=True), "b benchmark  w write file  s save+exit  n new run")
-    else:
-        print(paint("controls:", "magenta", bold=True), "[] lr  -/+ mutation  g/G games  r restart  n new run  h help")
-    print(paint("recent:", "blue", bold=True))
-    for line in recent_lines:
-        print(f"  {line}")
-    if finished:
-        print()
-        print(paint(f"benchmark games/opponent: {benchmark_games}", "cyan", bold=True))
+        report_lines.append(f"benchmark games/opponent: {benchmark_games}")
         if benchmark_rows is None:
-            print("benchmark: not run yet")
+            report_lines.append("benchmark: not run yet")
         else:
-            print(paint("benchmark:", "cyan", bold=True))
-            for line in dashboard_benchmark_lines(benchmark_rows):
-                print(line)
+            report_lines.extend(dashboard_benchmark_lines(benchmark_rows))
+    else:
+        report_lines.extend(recent_lines[-12:])
+    if not report_lines:
+        report_lines = ["No events yet."]
+
+    fixed_height = 1 + len(status_lines) + 2 + max(len(training_lines), len(strategy_lines)) + 4
+    report_budget = max(6, terminal.lines - fixed_height)
+    if finished and benchmark_rows is not None:
+        report_lines = report_lines[-report_budget:]
+    else:
+        report_lines = report_lines[-report_budget:]
+
+    for line in panel("Status", status_lines, content_width):
+        print(line)
+    if content_width >= 96:
+        left = panel("Training Health", training_lines, left_width)
+        right = panel("Strategy", strategy_lines, right_width)
+        target_height = max(len(left), len(right))
+        left = pad_panel_height(left, left_width, target_height)
+        right = pad_panel_height(right, right_width, target_height)
+        for line in combine_panels(left, right):
+            print(line)
+    else:
+        for line in panel("Training Health", training_lines, content_width):
+            print(line)
+        for line in panel("Strategy", strategy_lines, content_width):
+            print(line)
+    for line in panel("Controls", [control_text], content_width):
+        print(line)
+    report_title = "Report" if not finished or benchmark_rows is None else "Benchmark Report"
+    for line in panel(report_title, report_lines, content_width):
+        print(line)
     print(flush=True)
 
 

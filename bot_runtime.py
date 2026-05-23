@@ -93,11 +93,13 @@ class PlayVsAIGame(Game):
         self.turn_records = []
 
     def play_turn(self):
+        from game_state import UI
+
+        UI.clear_screen()
         print(f"\n=== {self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS}) ===")
         self.show_state()
         before_snapshot = self.snapshot_turn()
 
-        self.show_player_economy(self.human)
         self.human.allocation = self.prompt_allocation(self.human)
         print(f"\n{self.ai.name} writes sealed orders.")
         self.ai.allocation = self.strategy.choose_allocation(
@@ -107,25 +109,52 @@ class PlayVsAIGame(Game):
 
         orders_snapshot = self.snapshot_turn()
         self.reveal_orders()
-        self.resolve_orders()
+        self.show_bulletin("Resolution", self.resolve_orders)
         if self.game_over:
             after_snapshot = self.snapshot_turn()
             self.record_turn(before_snapshot, orders_snapshot, after_snapshot)
             return
         self.pause_after_resolution()
-        self.apply_port_labor()
-        self.advance_convoys()
+        self.show_bulletin("Port Labor", self.apply_port_labor)
+        self.show_bulletin("Convoy Arrivals", self.advance_convoys)
         self.buy_phase()
         after_snapshot = self.snapshot_turn()
         self.record_turn(before_snapshot, orders_snapshot, after_snapshot)
         self.show_turn_summary(before_snapshot, after_snapshot, orders_snapshot)
 
     def buy_phase(self):
-        print("\n=== BUY PHASE ===")
+        self.buy_phase_baselines = {self.human: self.snapshot_player(self.human)}
         self.run_buy_menu(self.human)
-        print(f"\n{self.ai.name} takes its buy phase.")
+        from game_state import UI
+
+        before = self.snapshot_player(self.ai)
+        self.buy_phase_baselines = {self.ai: before}
         self.strategy.run_buy_phase(self, self.ai, self.human, self.rng)
-        print(f"{self.ai.name} finishes the buy phase.")
+        after = self.snapshot_player(self.ai)
+        lines = [f"{self.ai.name} takes its buy phase."]
+        self.add_status_change(lines, "Gold", before, after, "gold")
+        self.add_status_change(lines, "Ships", before, after, "ships")
+        self.add_status_change(lines, "Shipyard", before, after, "shipyard_status")
+        self.add_status_change(lines, "Fort", before, after, "fort_status")
+        self.add_status_change(lines, "Trade guild", before, after, "trade_guild_status")
+        self.add_status_change(lines, "Fishing", before, after, "fishing_status")
+        self.add_status_change(lines, "Raid fatigue", before, after, "raid_fatigue_status")
+        self.add_status_change(lines, "Dry dock", before, after, "dry_dock_status")
+        self.add_status_change(lines, "Fire ships", before, after, "fire_ship_status")
+        self.add_status_change(lines, "Guard captains", before, after, "guard_captain_status")
+        if len(lines) == 1:
+            lines.append("No visible purchases.")
+        self.render_play_area(
+            phase="AI Buy Phase",
+            control_lines=["AI completed its buy phase.", "Review the changes."],
+            info_lines=lines,
+            info_title="AI Harbor Report",
+            clear=True,
+            include_state=True,
+        )
+        input("Press Enter to continue...")
+        self.buy_phase_baselines = {}
+        UI.clear_screen()
         self.show_state()
 
     def record_turn(self, before_snapshot, orders_snapshot, after_snapshot):

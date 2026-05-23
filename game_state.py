@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 
@@ -17,6 +18,8 @@ class UI:
         "white": "37",
         "yellow": "33",
     }
+    ansi_pattern = re.compile(r"\033\[[0-9;]*m")
+    amount_pattern = re.compile(r"(?<![\w.])-?\d+(?:/\d+)?(?:\.\d+)?")
 
     @classmethod
     def prepare_terminal(cls):
@@ -42,6 +45,11 @@ class UI:
     def section(cls, title, color="cyan"):
         print()
         print(cls.paint(f"=== {title} ===", color, bold=True))
+
+    @classmethod
+    def clear_screen(cls):
+        if cls.enabled:
+            print("\033[2J\033[H", end="")
 
     @classmethod
     def subheading(cls, title, color="blue"):
@@ -76,9 +84,133 @@ class UI:
     def danger(cls, text):
         return cls.paint(text, "red", bold=True)
 
+    @classmethod
+    def amount(cls, value, unit="", color="cyan"):
+        suffix = f" {unit}" if unit else ""
+        return f"{cls.paint(str(value), color, bold=True)}{suffix}"
+
+    @classmethod
+    def delta(cls, value):
+        if value == 0:
+            return ""
+        color = "green" if value > 0 else "red"
+        sign = "+" if value > 0 else ""
+        return " " + cls.paint(f"({sign}{value})", color, bold=True)
+
+    @classmethod
+    def accent_amounts(cls, text, color="cyan"):
+        if not cls.enabled:
+            return text
+        if "\033[" in text:
+            return text
+        return cls.amount_pattern.sub(
+            lambda match: cls.paint(match.group(0), color, bold=True),
+            text,
+        )
+
+    @classmethod
+    def visible_len(cls, text):
+        return len(cls.ansi_pattern.sub("", str(text)))
+
+    @classmethod
+    def fit_panel_line(cls, text, width):
+        text = str(text)
+        content_width = max(1, width - 4)
+        if cls.visible_len(text) > content_width:
+            plain = cls.ansi_pattern.sub("", text)
+            text = plain[: max(0, content_width - 3)] + "..."
+        return f"| {text}{' ' * max(0, content_width - cls.visible_len(text))} |"
+
+    @classmethod
+    def wrap_panel_line(cls, text, width):
+        content_width = max(1, width - 4)
+        text = str(text)
+        if cls.visible_len(text) <= content_width:
+            return [text]
+
+        words = text.split(" ")
+        wrapped = []
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if cls.visible_len(candidate) <= content_width:
+                current = candidate
+                continue
+
+            if current:
+                wrapped.append(current)
+                current = ""
+
+            while cls.visible_len(word) > content_width:
+                head, word = cls.split_visible(word, content_width)
+                wrapped.append(head)
+            current = word
+
+        if current:
+            wrapped.append(current)
+        return wrapped or [""]
+
+    @classmethod
+    def split_visible(cls, text, width):
+        visible = 0
+        index = 0
+        while index < len(text) and visible < width:
+            if text[index] == "\033":
+                match = cls.ansi_pattern.match(text, index)
+                if match:
+                    index = match.end()
+                    continue
+            visible += 1
+            index += 1
+        return text[:index], text[index:]
+
+    @classmethod
+    def panel(cls, title, lines, width=60, wrap=False, body_height=None):
+        width = max(24, width)
+        title_text = f" {cls.paint(title, 'blue', bold=True)} "
+        top_fill = max(0, width - cls.visible_len(title_text) - 2)
+        top = "+" + title_text + "-" * top_fill + "+"
+        body_text = []
+        for line in lines:
+            if wrap:
+                body_text.extend(cls.wrap_panel_line(line, width))
+            else:
+                body_text.append(line)
+        if body_height is not None and len(body_text) > body_height:
+            hidden = len(body_text) - body_height + 1
+            body_text = body_text[: max(0, body_height - 1)]
+            body_text.append(cls.muted(f"... {hidden} more line(s)"))
+        if body_height is not None:
+            while len(body_text) < body_height:
+                body_text.append("")
+        body = [cls.fit_panel_line(line, width) for line in body_text]
+        bottom = "+" + "-" * (width - 2) + "+"
+        return [top, *body, bottom]
+
+    @classmethod
+    def combine_panels(cls, left, right, gap=2):
+        height = max(len(left), len(right))
+        left_width = max(cls.visible_len(line) for line in left) if left else 0
+        right_width = max(cls.visible_len(line) for line in right) if right else 0
+        rows = []
+        for index in range(height):
+            left_line = left[index] if index < len(left) else " " * left_width
+            right_line = right[index] if index < len(right) else " " * right_width
+            rows.append(
+                f"{left_line}{' ' * max(0, left_width - cls.visible_len(left_line) + gap)}{right_line}"
+            )
+        return rows
+
+    @classmethod
+    def pad_panel_height(cls, lines, width, target_height):
+        lines = list(lines)
+        while len(lines) < target_height and len(lines) >= 2:
+            lines.insert(-1, cls.fit_panel_line("", width))
+        return lines
+
 
 class Rules:
-    VERSION = "0.42"
+    VERSION = "0.43"
     STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -200,6 +332,7 @@ class Nation:
         self.shipyard_started = False
         self.shipyard_completed = False
         self.shipyard_labor = 0
+        self.shipyard_destroyed = False
         self.fort_started = False
         self.fort_completed = False
         self.fort_labor = 0
@@ -225,25 +358,52 @@ class Nation:
         self.dry_dock_completed = False
 
     def status_report(self):
-        print(
-            f"{UI.paint(self.name, 'magenta', bold=True)}: "
-            f"{UI.paint(str(self.gold), self.gold_color, bold=True)} gold, "
-            f"{UI.paint(str(self.ships), 'cyan', bold=True)} ships, "
-            f"{UI.paint(str(self.asset_score), 'yellow', bold=True)} assets"
-        )
-        print(
-            f"  {UI.field('Treasure')} "
-            f"{self.treasure_value} gold{self.treasure_status}"
-        )
-        print(f"  {UI.field('Payroll')} {self.payroll_status}")
-        print(f"  {UI.field('Shipyard')} {self.shipyard_status}")
-        print(f"  {UI.field('Fort')} {self.fort_status}")
-        print(f"  {UI.field('Trade guild')} {self.trade_guild_status}")
-        print(f"  {UI.field('Fishing')} {self.fishing_status}")
-        print(f"  {UI.field('Raid fatigue')} {self.raid_fatigue_status}")
-        print(f"  {UI.field('Dry dock')} {self.dry_dock_status}")
-        print(f"  {UI.field('Fire ships')} {self.fire_ship_status}")
-        print(f"  {UI.field('Guard captains')} {self.guard_captain_status}")
+        for line in self.status_lines():
+            print(line)
+
+    def status_lines(self):
+        return [
+            (
+                f"{UI.amount(self.gold, 'gold', self.gold_color)}, "
+                f"{UI.amount(self.ships, 'ships')}, "
+                f"{UI.amount(self.asset_score, 'assets', 'yellow')}"
+            ),
+            (
+                f"{UI.field('Treasure')} "
+                f"{UI.amount(self.treasure_value, 'gold', 'yellow')}"
+                f"{self.treasure_status}"
+            ),
+            f"{UI.field('Payroll')} {self.payroll_status}",
+            f"{UI.field('Shipyard')} {self.shipyard_status}",
+            f"{UI.field('Fort')} {self.fort_status}",
+            f"{UI.field('Trade guild')} {self.trade_guild_status}",
+            f"{UI.field('Fishing')} {self.fishing_status}",
+            f"{UI.field('Raid fatigue')} {self.raid_fatigue_status}",
+            f"{UI.field('Port defences')} {self.port_defense_status}",
+            f"{UI.field('Dry dock')} {self.dry_dock_status}",
+            f"{UI.field('Fire ships')} {self.fire_ship_status}",
+            f"{UI.field('Guard captains')} {self.guard_captain_status}",
+        ]
+
+    def compact_status_lines(self):
+        return [
+            (
+                f"{UI.amount(self.gold, 'gold', self.gold_color)}  "
+                f"{UI.amount(self.ships, 'ships')}  "
+                f"{UI.amount(self.asset_score, 'assets', 'yellow')}"
+            ),
+            f"Treasure: {UI.amount(self.treasure_value, 'gold', 'yellow')}{self.treasure_status}",
+            f"Payroll: {self.payroll_status}",
+            f"Yard: {self.shipyard_status}",
+            f"Fort: {self.fort_status}",
+            f"Guild: {self.trade_guild_status}",
+            f"Fishing: {self.fishing_status}",
+            f"Raid: {self.raid_fatigue_status}",
+            f"Port defences: {self.port_defense_status}",
+            f"Dry dock: {self.dry_dock_status}",
+            f"Fire: {self.fire_ship_status}",
+            f"Captains: {self.guard_captain_status}",
+        ]
 
     @property
     def gold_color(self):
@@ -261,6 +421,7 @@ class Nation:
     def start_shipyard(self):
         self.gold -= Rules.SHIPYARD_COST
         self.shipyard_started = True
+        self.shipyard_destroyed = False
 
     def unlock_fire_ships(self):
         self.gold -= Rules.FIRE_SHIP_UPGRADE_COST
@@ -316,6 +477,7 @@ class Nation:
         self.shipyard_started = False
         self.shipyard_completed = False
         self.shipyard_labor = 0
+        self.shipyard_destroyed = True
 
     def disable_fishing_dock(self):
         if not self.fishing_dock_built or self.fishing_dock_disabled:
@@ -465,6 +627,34 @@ class Nation:
         return 0
 
     @property
+    def port_attack_threshold(self):
+        threshold = Rules.PORT_ATTACK_SHIPS_REQUIRED
+        if self.fort_completed:
+            threshold += Rules.FORT_PORT_DEFENSE
+            threshold += self.guard_captain_port_defense
+        return threshold
+
+    @property
+    def port_defense_status(self):
+        parts = [f"{Rules.PORT_ATTACK_SHIPS_REQUIRED} base"]
+        if self.fort_completed:
+            parts.append(f"+{Rules.FORT_PORT_DEFENSE} fort")
+            captain_defense = self.guard_captain_port_defense
+            if captain_defense:
+                parts.append(
+                    f"+{captain_defense} captains "
+                    f"({self.guard_captains} x {Rules.GUARD_CAPTAIN_PORT_DEFENSE})"
+                )
+            elif self.guard_captains:
+                parts.append(f"+0 captains ({self.guard_captains} stationed)")
+        elif self.guard_captains:
+            parts.append(f"+0 captains ({self.guard_captains}, requires fort)")
+        return (
+            f"{self.port_attack_threshold} raid ships to destroy port "
+            f"({', '.join(parts)})"
+        )
+
+    @property
     def raid_repair_cost(self):
         if self.dry_dock_completed:
             return 0
@@ -529,6 +719,8 @@ class Nation:
                 f"under construction, {self.shipyard_labor}/"
                 f"{Rules.SHIPYARD_LABOR_REQUIRED} labor"
             )
+        if self.shipyard_destroyed:
+            return f"burned down ({Rules.SHIPYARD_COST} gold to rebuild)"
         return (
             f"not started ({Rules.SHIPYARD_COST} gold, "
             f"{Rules.SHIPYARD_LABOR_REQUIRED} labor)"

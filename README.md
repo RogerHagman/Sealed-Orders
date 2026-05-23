@@ -34,7 +34,7 @@
 
 - Forts can be started during the buy phase for 10 gold.
 - A fort requires 10 labor to complete.
-- Idle ships apply labor to shipyards first, then forts.
+- Unassigned ships become port workers and apply labor to shipyards first, then forts.
 - A completed fort blocks 1 shipyard-bound fire ship each turn.
 - A completed fort raises the raid force needed to destroy the home port from 5 to 10.
 - Completed forts count as 10 value in final asset scoring.
@@ -45,7 +45,7 @@
 - A completed shipyard lowers ship cost from 6 to 5 gold.
 - Trade guilds can be started during the buy phase for 8 gold.
 - A trade guild requires 6 labor to complete.
-- Idle ships apply labor to shipyards first, then forts, then trade guilds.
+- Unassigned ships become port workers and apply labor to shipyards first, then forts, then trade guilds.
 - A completed trade guild adds bonus gold from completed trade each turn.
 - Trade guild bonus is 1 gold minimum when at least 1 trade ship completes trade, then +1 gold per full 5 completed trade ships.
 - Completed trade guilds count as 8 value in final asset scoring.
