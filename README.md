@@ -224,6 +224,20 @@
 - Raid fatigue now damages 1 ship every 5 lifetime raid ship actions instead of every 10.
 - Completed shipyards now reduce damaged-ship repair cost to 2 gold instead of 1; completed dry docks still make raid repairs free.
 
+## Version 0.43
+
+- UI legibility release ahead of the larger `0.5` rules milestone.
+- The interactive game now uses a persistent pane layout for harbor state, controls, and reports instead of relying on scrolling text.
+- Sealed-order reveals stay visible during resolution and show each nation's committed trade, raid, guard, and fire orders.
+- Resolution bulletins now use clearer language for quiet lanes, add spacing between major report sections, and color-code event types such as steals, smuggling, fishing, trade, and confiscation.
+- Nation names are highlighted in bulletin reports so it is easier to see who each event affects.
+- The assignment menu now treats unassigned ships as automatic port workers instead of a mutable idle allocation row.
+- Buy-phase changes now show inline deltas such as `ships (+1)` and a compact buy-phase change summary.
+- Harbor details now include a `Port defences` metric showing how many raid ships are required to destroy the port, including fort and guard-captain contributions.
+- Harbor details now include an ASCII harbor-works strip for shipyards, forts, guilds, fishing docks, dry docks, fire plans, guard captains, and convoys.
+- Inactive harbor works are dimmed, active or completed upgrades are colored, and burned or disabled infrastructure is shown in red.
+- Shipyards now remember when they have been burned down for status/UI purposes; rebuilding clears the burned marker.
+
 ## Bot Meta Notes
 
 ### Human Shadow
