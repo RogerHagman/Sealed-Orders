@@ -226,7 +226,12 @@ class BotStrategy:
                 project == "guard_captain"
                 and game.guard_captain_disabled_reason(player) is None
             ):
-                if rng.random() < self.project_buy_bias("guard_captain"):
+                guard_captain_bias = self.project_buy_bias("guard_captain")
+                if player.guard_captains >= Rules.GUARD_CAPTAIN_MAX - 2:
+                    guard_captain_bias += 0.2
+                if opponent.allocation.trade > 0:
+                    guard_captain_bias += 0.1
+                if rng.random() < min(1.0, guard_captain_bias):
                     player.hire_guard_captain()
             elif (
                 project == "fishing_dock"

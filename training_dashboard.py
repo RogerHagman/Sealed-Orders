@@ -249,7 +249,8 @@ def render_training_dashboard(
         f"port_losses={stats.get('port_losses', 0)}  "
         f"damage={average(stats, 'raid_damage_events_total'):.1f}/game  "
         f"repairs={average(stats, 'raid_repairs_total'):.1f}/game  "
-        f"sunk_damaged={average(stats, 'damaged_raiders_sunk_total'):.1f}/game"
+        f"sunk_damaged={average(stats, 'damaged_raiders_sunk_total'):.1f}/game  "
+        f"smugglers={average(stats, 'guard_captain_ship_captures_total'):.1f}/game"
     )
     print()
     print(

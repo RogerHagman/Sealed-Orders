@@ -62,6 +62,7 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
         "damaged_raiders_sunk_total": 0,
         "guard_captain_games": 0,
         "guard_captains_total": 0,
+        "guard_captain_ship_captures_total": 0,
         "port_losses": 0,
         "dominance_cap_penalty": 0,
         "matchup_floor_penalty": 0,
@@ -136,6 +137,9 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
             if player.guard_captains:
                 stats["guard_captain_games"] += 1
             stats["guard_captains_total"] += player.guard_captains
+            stats["guard_captain_ship_captures_total"] += (
+                player.guard_captain_ship_captures
+            )
             captain_bonus = player.guard_captains * SURVIVAL_GUARD_CAPTAIN_BONUS
             stats["survival_infra_bonus"] += captain_bonus
             stats["fitness"] += captain_bonus
@@ -535,6 +539,8 @@ def print_evolving_strategy(label, strategy, stats):
         f"repairs avg {average(stats, 'raid_repairs_total'):.1f}, "
         f"sunk damaged avg {average(stats, 'damaged_raiders_sunk_total'):.1f}, "
         f"damaged avg {average(stats, 'damaged_ships_total'):.1f}, "
+        f"smugglers captured avg "
+        f"{average(stats, 'guard_captain_ship_captures_total'):.1f}, "
         f"captains {stats.get('guard_captain_games', 0)}/{stats['games']} "
         f"(avg {average(stats, 'guard_captains_total'):.1f})"
     )
@@ -584,6 +590,10 @@ def training_history_record(generation, status, stats, strategy):
         "avg_damaged_raiders_sunk": average(stats, "damaged_raiders_sunk_total"),
         "guard_captain_rate": average(stats, "guard_captain_games"),
         "avg_guard_captains": average(stats, "guard_captains_total"),
+        "avg_guard_captain_ship_captures": average(
+            stats,
+            "guard_captain_ship_captures_total",
+        ),
         "strategy": strategy_record(strategy),
     }
 
@@ -663,6 +673,7 @@ def write_training_history_csv(history, history_path):
         "avg_damaged_raiders_sunk",
         "guard_captain_rate",
         "avg_guard_captains",
+        "avg_guard_captain_ship_captures",
         "trade_weight",
         "raid_weight",
         "guard_weight",
@@ -723,6 +734,7 @@ def write_training_history_csv(history, history_path):
                 f"{row['avg_damaged_raiders_sunk']:.6f}",
                 f"{row['guard_captain_rate']:.6f}",
                 f"{row['avg_guard_captains']:.6f}",
+                f"{row['avg_guard_captain_ship_captures']:.6f}",
                 f"{strategy['trade_weight']:.6f}",
                 f"{strategy['raid_weight']:.6f}",
                 f"{strategy['guard_weight']:.6f}",

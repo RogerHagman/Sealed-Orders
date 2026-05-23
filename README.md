@@ -211,6 +211,14 @@
 - `main.py` remains the CLI entrypoint and still re-exports `Allocation`, `Game`, and `Rules` for compatibility.
 - `bot_playtest.py` remains as a compatibility import surface for existing scripts and commands.
 
+## Version 0.41
+
+- Maxed guard captains now capture 1 offending smuggling trade ship instead of confiscating smuggle gold that turn.
+- Captured smuggling ships transfer from the trader's fleet to the guard captain owner's fleet.
+- Guard captains below the max still use the existing smuggle-gold confiscation rule.
+- Dry docks still require a completed shipyard, but now cost 2 gold and require 1 labor.
+- Training and dashboard stats now track guard-captain smuggling ship captures.
+
 ## Bot Meta Notes
 
 ### Human Shadow

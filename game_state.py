@@ -78,7 +78,7 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.40"
+    VERSION = "0.41"
     STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -100,6 +100,8 @@ class Rules:
     GUARD_CAPTAIN_MAX = 5
     GUARD_CAPTAIN_PORT_DEFENSE = 1
     GUARD_CAPTAIN_CONFISCATIONS_PER_TURN = 1
+    GUARD_CAPTAIN_SHIP_CAPTURE_THRESHOLD = 5
+    GUARD_CAPTAIN_SHIP_CAPTURES_PER_TURN = 1
     TRADE_GUILD_COST = 6
     TRADE_GUILD_LABOR_REQUIRED = 4
     TRADE_GUILD_ASSET_VALUE = 8
@@ -113,8 +115,8 @@ class Rules:
     RAID_ACTIONS_PER_DAMAGE = 10
     RAID_REPAIR_COST = 4
     SHIPYARD_RAID_REPAIR_COST = 1
-    DRY_DOCK_COST = 3
-    DRY_DOCK_LABOR_REQUIRED = 2
+    DRY_DOCK_COST = 2
+    DRY_DOCK_LABOR_REQUIRED = 1
     MAX_TURNS = 12
     MONTHS = [
         "January",
@@ -173,12 +175,14 @@ class ResolutionResult:
         fishing_income=0,
         stolen_income=0,
         confiscated_income=0,
+        captured_smuggling_ships=0,
         treasure_growth=0,
     ):
         self.trade_income = trade_income
         self.fishing_income = fishing_income
         self.stolen_income = stolen_income
         self.confiscated_income = confiscated_income
+        self.captured_smuggling_ships = captured_smuggling_ships
         self.treasure_growth = treasure_growth
 
 
@@ -205,6 +209,7 @@ class Nation:
         self.trade_guild_labor = 0
         self.fire_ships_unlocked = False
         self.guard_captains = 0
+        self.guard_captain_ship_captures = 0
         self.fishing_dock_started = False
         self.fishing_dock_labor = 0
         self.fishing_dock_built = False
@@ -588,6 +593,14 @@ class Nation:
         if self.guard_captains == 0:
             return status
 
+        if self.guard_captains >= Rules.GUARD_CAPTAIN_SHIP_CAPTURE_THRESHOLD:
+            capstone = (
+                "captures 1 smuggling ship instead of confiscating gold"
+            )
+        else:
+            needed = Rules.GUARD_CAPTAIN_SHIP_CAPTURE_THRESHOLD - self.guard_captains
+            capstone = f"{needed} more for smuggler ship capture"
+
         confiscations = (
             self.guard_captains * Rules.GUARD_CAPTAIN_CONFISCATIONS_PER_TURN
         )
@@ -595,9 +608,9 @@ class Nation:
         if defense:
             return (
                 f"{status}, confiscates {confiscations} smuggle gold, "
-                f"+{defense} port defense"
+                f"+{defense} port defense, {capstone}"
             )
-        return f"{status}, confiscates {confiscations} smuggle gold"
+        return f"{status}, confiscates {confiscations} smuggle gold, {capstone}"
 
     @property
     def raid_fatigue_status(self):

@@ -547,11 +547,28 @@ class Game:
 
         smuggled_trade = min(opponent.allocation.guard, remaining_trade)
         remaining_trade -= smuggled_trade
-        confiscated_trade = min(
-            smuggled_trade,
-            opponent.guard_captains * Rules.GUARD_CAPTAIN_CONFISCATIONS_PER_TURN,
+        captured_smuggling_ships = 0
+        if (
+            smuggled_trade > 0
+            and opponent.guard_captains >= Rules.GUARD_CAPTAIN_SHIP_CAPTURE_THRESHOLD
+        ):
+            captured_smuggling_ships = min(
+                smuggled_trade,
+                Rules.GUARD_CAPTAIN_SHIP_CAPTURES_PER_TURN,
+            )
+            trader.ships -= captured_smuggling_ships
+            opponent.ships += captured_smuggling_ships
+            trader.cap_damaged_ships()
+            opponent.guard_captain_ship_captures += captured_smuggling_ships
+            confiscated_trade = 0
+        else:
+            confiscated_trade = min(
+                smuggled_trade,
+                opponent.guard_captains * Rules.GUARD_CAPTAIN_CONFISCATIONS_PER_TURN,
+            )
+        paid_smuggled_trade = (
+            smuggled_trade - confiscated_trade - captured_smuggling_ships
         )
-        paid_smuggled_trade = smuggled_trade - confiscated_trade
         smuggle_income = paid_smuggled_trade * Rules.SMUGGLE_INCOME
         confiscated_income = confiscated_trade * Rules.SMUGGLE_INCOME
 
@@ -573,6 +590,11 @@ class Game:
             print(
                 f" - Guard captains catch {confiscated_trade} smuggler(s); "
                 f"{opponent.name} confiscates {confiscated_income} gold."
+            )
+        if captured_smuggling_ships:
+            print(
+                f" - Veteran guard captains seize {captured_smuggling_ships} "
+                f"smuggling ship(s); {opponent.name} adds them to the fleet."
             )
         print(
             f" - {remaining_trade} trade ship(s) complete trade for "
@@ -598,6 +620,7 @@ class Game:
             fishing_income=fishing_income,
             stolen_income=stolen_income,
             confiscated_income=confiscated_income,
+            captured_smuggling_ships=captured_smuggling_ships,
             treasure_growth=treasure_growth,
         )
 

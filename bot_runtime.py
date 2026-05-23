@@ -225,6 +225,7 @@ def player_record(player):
         "dry_dock_completed": player.dry_dock_completed,
         "fire_ships_unlocked": player.fire_ships_unlocked,
         "guard_captains": player.guard_captains,
+        "guard_captain_ship_captures": player.guard_captain_ship_captures,
         "treasure_value": player.treasure_value,
         "treasure_at_sea": player.has_treasure_at_sea,
         "payroll_launched": player.payroll_launched,
