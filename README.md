@@ -202,6 +202,15 @@
 - Bot training now evolves repair and dry dock biases.
 - Added `Reef Bloom`, the v31 fishing-fortress economy bot, to the default bot roster.
 
+## Version 0.40
+
+- Mechanical refactor only; no intended gameplay, bot, training, CLI, or strategy JSON behavior changes.
+- Split game state and rules into `game_state.py`.
+- Split the interactive game engine into `game_engine.py`.
+- Split bot strategy, roster, runtime, benchmarking, training, and dashboard code into smaller `bot_*.py` and `training_dashboard.py` modules.
+- `main.py` remains the CLI entrypoint and still re-exports `Allocation`, `Game`, and `Rules` for compatibility.
+- `bot_playtest.py` remains as a compatibility import surface for existing scripts and commands.
+
 ## Bot Meta Notes
 
 ### Human Shadow

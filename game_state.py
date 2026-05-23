@@ -78,7 +78,7 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.34"
+    VERSION = "0.40"
     STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
