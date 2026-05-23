@@ -2,6 +2,10 @@ import contextlib
 import io
 import json
 import random
+import select
+import sys
+import termios
+import tty
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +27,8 @@ BOT_WEIGHT_FIELDS = [
     "fire_plans_bias",
     "fishing_dock_bias",
     "fishing_boat_bias",
+    "dry_dock_bias",
+    "repair_bias",
     "construction_idle_bias",
 ]
 BUILD_PROJECTS = [
@@ -33,11 +39,24 @@ BUILD_PROJECTS = [
     "fishing_boat",
     "guard_captain",
     "fire_plans",
+    "dry_dock",
 ]
 MIN_FLEET_FOR_PROJECTS = 3
 MIN_FLEET_FOR_CONVOYS = 2
 REBUILD_FLEET_TARGET = 4
 MIDGAME_START_TURN = 4
+PRIORITY_PROJECT_MIN_BIAS = 0.20
+MATCHUP_FLOOR_WIN_RATE = 0.35
+DOMINANCE_CAP_PER_GAME = 180
+MATCHUP_FLOOR_PENALTY = 350
+MATCHUP_FLOOR_RECOVERY_BONUS = 60000
+ROBUSTNESS_ALLOWED_REGRESSION = 0.05
+ROBUSTNESS_REGRESSION_PREMIUM = 12000
+ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.15
+PORT_LOSS_PRESSURE_PENALTY = 80
+SURVIVAL_SHIPYARD_BONUS = 20
+SURVIVAL_FORT_BONUS = 20
+SURVIVAL_GUARD_CAPTAIN_BONUS = 8
 
 
 class BotStrategy:
@@ -58,8 +77,13 @@ class BotStrategy:
         fire_plans_bias=None,
         fishing_dock_bias=None,
         fishing_boat_bias=None,
+        dry_dock_bias=None,
+        repair_bias=0.5,
         construction_idle_bias=0.0,
         opening_book=None,
+        adaptive=False,
+        adaptation_strength=0.0,
+        adaptation_turns=3,
     ):
         self.name = name
         self.trade_weight = trade_weight
@@ -88,9 +112,15 @@ class BotStrategy:
             "fishing_boat",
             fishing_boat_bias,
         )
+        self.dry_dock_bias = self.default_project_bias("dry_dock", dry_dock_bias)
+        self.repair_bias = repair_bias
         self.construction_idle_bias = construction_idle_bias
         self.opening_book = opening_book or []
         self.opening_choices = {}
+        self.adaptive = adaptive
+        self.adaptation_strength = adaptation_strength
+        self.adaptation_turns = adaptation_turns
+        self.observations = {}
 
     def default_project_bias(self, project, explicit_bias):
         if explicit_bias is not None:
@@ -98,6 +128,12 @@ class BotStrategy:
         if project in self.build_priority:
             return 1.0
         return 0.0
+
+    def project_buy_bias(self, project):
+        bias = getattr(self, f"{project}_bias")
+        if project in self.build_priority:
+            return max(bias, PRIORITY_PROJECT_MIN_BIAS)
+        return bias
 
     def choose_allocation(self, game, player, opponent, rng):
         ships = player.ships
@@ -122,11 +158,12 @@ class BotStrategy:
         idle_ships = self.choose_idle_construction_labor(player, ships, position)
         ships -= idle_ships
 
+        can_use_fire = self.should_consider_fire(player, opponent)
         weights = {
             "trade": self.trade_weight,
             "raid": self.raid_weight,
             "guard": self.guard_weight,
-            "fire": self.fire_weight if self.should_consider_fire(player, opponent) else 0,
+            "fire": self.fire_weight if can_use_fire else 0,
         }
 
         if player.ships <= 2:
@@ -145,6 +182,9 @@ class BotStrategy:
         if opponent.shipyard_started:
             weights["fire"] += 1.5
         self.adjust_weights_for_position(weights, position)
+        self.adjust_weights_for_observations(weights, game, player, opponent)
+        if not can_use_fire:
+            weights["fire"] = 0
 
         allocation = {"trade": 0, "raid": 0, "guard": 0, "fire": 0}
         for _ in range(ships):
@@ -164,6 +204,7 @@ class BotStrategy:
         if self.run_opening_buy_phase(game, player, opponent, rng):
             return
 
+        self.repair_damaged_raiders(player, rng)
         self.rebuild_fleet(player, rng)
         position = self.evaluate_position(game, player, opponent)
 
@@ -173,45 +214,54 @@ class BotStrategy:
             if not self.should_spend_on_project(project, position):
                 continue
             if project == "shipyard" and game.shipyard_disabled_reason(player) is None:
-                if rng.random() < self.shipyard_bias:
+                if rng.random() < self.project_buy_bias("shipyard"):
                     player.start_shipyard()
             elif project == "fort" and game.fort_disabled_reason(player) is None:
-                if rng.random() < self.fort_bias:
+                if rng.random() < self.project_buy_bias("fort"):
                     player.start_fort()
             elif (
                 project == "trade_guild"
                 and game.trade_guild_disabled_reason(player) is None
             ):
-                if rng.random() < self.trade_guild_bias:
+                if rng.random() < self.project_buy_bias("trade_guild"):
                     player.start_trade_guild()
             elif (
                 project == "fire_plans"
                 and game.fire_ship_plans_disabled_reason(player) is None
             ):
-                if rng.random() < self.fire_plans_bias:
+                if rng.random() < self.project_buy_bias("fire_plans"):
                     player.unlock_fire_ships()
             elif (
                 project == "guard_captain"
                 and game.guard_captain_disabled_reason(player) is None
             ):
-                if rng.random() < self.guard_captain_bias:
+                if rng.random() < self.project_buy_bias("guard_captain"):
                     player.hire_guard_captain()
             elif (
                 project == "fishing_dock"
                 and game.fishing_dock_disabled_reason(player) is None
             ):
-                if rng.random() < self.fishing_dock_bias:
+                if rng.random() < self.project_buy_bias("fishing_dock"):
                     player.build_or_repair_fishing_dock()
             elif (
                 project == "fishing_boat"
                 and game.buy_fishing_boats_disabled_reason(player) is None
             ):
-                if rng.random() < self.fishing_boat_bias:
+                if rng.random() < self.project_buy_bias("fishing_boat"):
                     reserve = self.gold_reserve(game, player, opponent)
                     boat_budget = max(0, player.gold - reserve)
                     affordable = game.affordable_fishing_boats(player, boat_budget)
                     if affordable > 0:
                         game.buy_fishing_boats(player, affordable)
+            elif (
+                project == "dry_dock"
+                and game.dry_dock_disabled_reason(player) is None
+            ):
+                dry_dock_bias = self.project_buy_bias("dry_dock")
+                if player.damaged_ships > 0 or self.raid_weight >= 3.0:
+                    dry_dock_bias += 0.25
+                if rng.random() < min(1.0, dry_dock_bias):
+                    player.start_dry_dock()
 
         if self.should_launch_payroll(game, player, rng):
             player.launch_payroll()
@@ -305,10 +355,44 @@ class BotStrategy:
                 affordable = game.affordable_fishing_boats(player)
                 if affordable > 0:
                     game.buy_fishing_boats(player, affordable)
+        elif action == "start_dry_dock":
+            if game.dry_dock_disabled_reason(player) is None:
+                player.start_dry_dock()
+        elif action == "repair_damaged_ships":
+            self.repair_all_affordable_damaged_ships(player)
         elif action == "buy_ships":
             affordable = player.gold // player.ship_cost
             if affordable > 0:
                 player.buy_ships(affordable)
+
+    def repair_damaged_raiders(self, player, rng):
+        if player.damaged_ships <= 0:
+            return
+
+        damaged_pressure = player.damaged_ships / max(1, player.ships)
+        repair_score = self.repair_bias
+        if player.raid_repair_cost == 0:
+            repair_score = 1.0
+        elif player.raid_repair_cost <= Rules.SHIPYARD_RAID_REPAIR_COST:
+            repair_score += 0.3
+        if damaged_pressure >= 0.25:
+            repair_score += 0.3
+        if player.ships <= Rules.PORT_ATTACK_SHIPS_REQUIRED:
+            repair_score += 0.2
+
+        if rng.random() < min(1.0, repair_score):
+            self.repair_all_affordable_damaged_ships(player)
+
+    def repair_all_affordable_damaged_ships(self, player):
+        if player.damaged_ships <= 0:
+            return 0
+        if player.raid_repair_cost == 0:
+            amount = player.damaged_ships
+        else:
+            amount = min(player.damaged_ships, player.gold // player.raid_repair_cost)
+        if amount <= 0:
+            return 0
+        return player.repair_damaged_ships(amount)
 
     def rebuild_fleet(self, player, rng):
         if player.ships >= MIN_FLEET_FOR_PROJECTS:
@@ -329,6 +413,8 @@ class BotStrategy:
             return player.ships >= 1
         if project == "fishing_boat":
             return player.fishing_dock_built and not player.fishing_dock_disabled
+        if project == "dry_dock":
+            return player.shipyard_completed
         if player.ships < MIN_FLEET_FOR_PROJECTS:
             return False
         if project in {"shipyard", "fort", "trade_guild"}:
@@ -384,6 +470,7 @@ class BotStrategy:
                 player.fort_started and not player.fort_completed,
                 player.trade_guild_started and not player.trade_guild_completed,
                 player.fishing_dock_started and not player.fishing_dock_built,
+                player.dry_dock_started and not player.dry_dock_completed,
             ]
         )
 
@@ -450,6 +537,10 @@ class BotStrategy:
             score += 2
         elif player.fort_started:
             score += 1
+        if player.dry_dock_completed:
+            score += 2
+        elif player.dry_dock_started:
+            score += 1
         if player.treasure_value > Rules.TREASURE_BASE_VALUE:
             score += 1
         return score
@@ -490,6 +581,81 @@ class BotStrategy:
         elif position["income_edge"] < 0:
             weights["raid"] += 0.75
 
+    def observation_key(self, game, player, opponent):
+        return (id(game), id(player), id(opponent))
+
+    def observe_opponent_opening(self, game, player, opponent):
+        if not self.adaptive:
+            return
+
+        observed_turn = game.turn
+        if observed_turn < 1 or observed_turn > self.adaptation_turns:
+            return
+
+        key = self.observation_key(game, player, opponent)
+        observations = self.observations.setdefault(key, {})
+        if observed_turn in observations:
+            return
+
+        observations[observed_turn] = Allocation(
+            trade=opponent.allocation.trade,
+            raid=opponent.allocation.raid,
+            guard=opponent.allocation.guard,
+            fire=opponent.allocation.fire,
+        )
+
+    def opponent_opening_profile(self, game, player, opponent):
+        observations = self.observations.get(
+            self.observation_key(game, player, opponent),
+            {},
+        )
+        profile = {"trade": 0, "raid": 0, "guard": 0, "fire": 0}
+        for allocation in observations.values():
+            profile["trade"] += allocation.trade
+            profile["raid"] += allocation.raid
+            profile["guard"] += allocation.guard
+            profile["fire"] += allocation.fire
+        return profile
+
+    def adjust_weights_for_observations(self, weights, game, player, opponent):
+        if not self.adaptive or self.adaptation_strength <= 0:
+            return
+
+        profile = self.opponent_opening_profile(game, player, opponent)
+        total = sum(profile.values())
+        if total <= 0:
+            return
+
+        strength = self.adaptation_strength
+        trade_share = profile["trade"] / total
+        raid_share = profile["raid"] / total
+        guard_share = profile["guard"] / total
+        fire_share = profile["fire"] / total
+
+        if raid_share >= 0.40:
+            weights["guard"] += 2.0 * strength
+            weights["trade"] *= max(0.35, 1.0 - 0.35 * strength)
+        if trade_share >= 0.45:
+            weights["raid"] += 2.0 * strength
+            weights["fire"] += 0.4 * strength
+            weights["trade"] *= max(0.60, 1.0 - 0.15 * strength)
+        if guard_share >= 0.35:
+            weights["trade"] += 1.5 * strength
+            weights["fire"] += 1.0 * strength
+            weights["raid"] *= max(0.40, 1.0 - 0.25 * strength)
+        if fire_share >= 0.10:
+            weights["guard"] += 1.5 * strength
+            weights["fire"] *= max(0.50, 1.0 - 0.20 * strength)
+
+    def clear_game_memory(self, game):
+        if not self.adaptive:
+            return
+
+        game_id = id(game)
+        stale_keys = [key for key in self.observations if key[0] == game_id]
+        for key in stale_keys:
+            del self.observations[key]
+
     def should_spend_on_project(self, project, position):
         if position["turn"] < MIDGAME_START_TURN:
             return True
@@ -497,9 +663,14 @@ class BotStrategy:
             "shipyard",
             "fort",
             "fishing_dock",
+            "dry_dock",
         }:
             return False
-        if position["fleet_gap"] <= -2 and project not in {"shipyard", "fishing_dock"}:
+        if position["fleet_gap"] <= -2 and project not in {
+            "shipyard",
+            "fishing_dock",
+            "dry_dock",
+        }:
             return False
         if position["can_threaten_port"]:
             return False
@@ -546,7 +717,10 @@ class SelfPlayGame(Game):
                 self.play_bot_turn()
                 self.turn += 1
 
-        return self.result()
+        result = self.result()
+        for strategy in self.strategies:
+            strategy.clear_game_memory(self)
+        return result
 
     def play_bot_turn(self):
         player_one, player_two = self.players
@@ -558,6 +732,8 @@ class SelfPlayGame(Game):
         player_two.allocation = strategy_two.choose_allocation(
             self, player_two, player_one, self.rng
         )
+        strategy_one.observe_opponent_opening(self, player_one, player_two)
+        strategy_two.observe_opponent_opening(self, player_two, player_one)
 
         self.resolve_orders()
         if self.game_over:
@@ -618,6 +794,7 @@ class PlayVsAIGame(Game):
         self.ai.allocation = self.strategy.choose_allocation(
             self, self.ai, self.human, self.rng
         )
+        self.strategy.observe_opponent_opening(self, self.ai, self.human)
 
         orders_snapshot = self.snapshot_turn()
         self.reveal_orders()
@@ -729,6 +906,14 @@ def player_record(player):
         "fishing_dock_built": player.fishing_dock_built,
         "fishing_dock_disabled": player.fishing_dock_disabled,
         "fishing_boats": player.fishing_boats,
+        "raid_actions_total": player.raid_actions_total,
+        "damaged_ships": player.damaged_ships,
+        "raid_damage_events": player.raid_damage_events,
+        "raid_repairs_total": player.raid_repairs_total,
+        "damaged_raiders_sunk": player.damaged_raiders_sunk,
+        "dry_dock_started": player.dry_dock_started,
+        "dry_dock_labor": player.dry_dock_labor,
+        "dry_dock_completed": player.dry_dock_completed,
         "fire_ships_unlocked": player.fire_ships_unlocked,
         "guard_captains": player.guard_captains,
         "treasure_value": player.treasure_value,
@@ -833,6 +1018,65 @@ HUMAN_WON_OPENING_BOOK = [
             3: {
                 "allocation": Allocation(trade=1, raid=3, guard=1),
                 "buy_actions": ["launch_treasure", "start_trade_guild", "buy_ships"],
+            },
+        },
+    },
+    {
+        "name": "dock_guard_treasure",
+        "source": "Current-rule human wins vs Admiral and Opportunist",
+        "turns": {
+            1: {
+                "allocation": Allocation(guard=3),
+                "buy_actions": ["launch_treasure", "build_fishing_dock", "buy_ships"],
+            },
+            2: {
+                "allocation": Allocation(raid=2, guard=2),
+                "buy_actions": [],
+            },
+            3: {
+                "allocation": Allocation(raid=3),
+                "buy_actions": ["buy_fire_ship_plans", "launch_treasure", "buy_ships"],
+            },
+        },
+    },
+    {
+        "name": "guild_dock_buildout",
+        "source": "Current-rule human win vs Corsair Spark",
+        "turns": {
+            1: {
+                "allocation": Allocation(guard=3),
+                "buy_actions": ["start_trade_guild", "build_fishing_dock"],
+            },
+            2: {
+                "allocation": Allocation(),
+                "buy_actions": [],
+            },
+            3: {
+                "allocation": Allocation(raid=3),
+                "buy_actions": ["start_shipyard", "hire_guard_captain"],
+            },
+        },
+    },
+    {
+        "name": "guard_captain_harbor_lock",
+        "source": "Current-rule human win vs Harbor Lock",
+        "turns": {
+            1: {
+                "allocation": Allocation(trade=3),
+                "buy_actions": ["launch_treasure", "buy_ships"],
+            },
+            2: {
+                "allocation": Allocation(trade=1, guard=4),
+                "buy_actions": ["hire_guard_captain"],
+            },
+            3: {
+                "allocation": Allocation(trade=1, raid=1, guard=3),
+                "buy_actions": [
+                    "start_shipyard",
+                    "build_fishing_dock",
+                    "hire_guard_captain",
+                    "buy_fire_ship_plans",
+                ],
             },
         },
     },
@@ -951,30 +1195,59 @@ def default_bot_strategies():
         ),
         BotStrategy(
             name="Human Shadow",
-            trade_weight=4.0,
-            raid_weight=0.8,
-            guard_weight=1.4,
-            fire_weight=0.02,
+            trade_weight=5.2,
+            raid_weight=1.0,
+            guard_weight=1.05,
+            fire_weight=0.06,
             build_priority=[
                 "shipyard",
                 "trade_guild",
                 "fishing_dock",
                 "fishing_boat",
-                "fort",
                 "guard_captain",
+                "fort",
                 "fire_plans",
             ],
-            convoy_bias=0.75,
+            convoy_bias=0.65,
             ship_bias=0.9,
-            shipyard_bias=0.75,
-            fort_bias=0.25,
-            trade_guild_bias=0.55,
-            fishing_dock_bias=0.45,
-            fishing_boat_bias=0.45,
-            guard_captain_bias=0.08,
-            fire_plans_bias=0.03,
-            construction_idle_bias=0.65,
+            shipyard_bias=0.72,
+            fort_bias=0.35,
+            trade_guild_bias=0.6,
+            fishing_dock_bias=0.7,
+            fishing_boat_bias=0.75,
+            guard_captain_bias=0.35,
+            fire_plans_bias=0.4,
+            construction_idle_bias=0.72,
             opening_book=HUMAN_WON_OPENING_BOOK,
+        ),
+        BotStrategy(
+            name="Tide Reader",
+            trade_weight=2.4,
+            raid_weight=2.4,
+            guard_weight=2.0,
+            fire_weight=0.8,
+            build_priority=[
+                "shipyard",
+                "trade_guild",
+                "fishing_dock",
+                "fishing_boat",
+                "fire_plans",
+                "guard_captain",
+                "fort",
+            ],
+            convoy_bias=0.45,
+            ship_bias=0.8,
+            shipyard_bias=0.55,
+            fort_bias=0.25,
+            trade_guild_bias=0.4,
+            fishing_dock_bias=0.55,
+            fishing_boat_bias=0.55,
+            guard_captain_bias=0.18,
+            fire_plans_bias=0.35,
+            construction_idle_bias=0.6,
+            adaptive=True,
+            adaptation_strength=1.0,
+            adaptation_turns=3,
         ),
         BotStrategy(
             name="Port Reaper",
@@ -1107,6 +1380,34 @@ def default_bot_strategies():
             construction_idle_bias=0.72,
         ),
         BotStrategy(
+            name="Reef Bloom",
+            trade_weight=0.00,
+            raid_weight=1.12,
+            guard_weight=0.09,
+            fire_weight=3.74,
+            build_priority=[
+                "fishing_dock",
+                "dry_dock",
+                "fishing_boat",
+                "shipyard",
+                "guard_captain",
+                "fort",
+                "fire_plans",
+            ],
+            convoy_bias=0.00,
+            ship_bias=0.14,
+            shipyard_bias=0.10,
+            fort_bias=0.82,
+            trade_guild_bias=0.00,
+            guard_captain_bias=0.18,
+            fire_plans_bias=0.15,
+            fishing_dock_bias=0.99,
+            fishing_boat_bias=0.97,
+            dry_dock_bias=0.68,
+            repair_bias=0.83,
+            construction_idle_bias=0.43,
+        ),
+        BotStrategy(
             name="The Red Tide",
             trade_weight=0.33,
             raid_weight=4.89,
@@ -1121,6 +1422,24 @@ def default_bot_strategies():
             guard_captain_bias=0.00,
             fire_plans_bias=0.00,
             construction_idle_bias=0.85,
+        ),
+        BotStrategy(
+            name="Signal Black",
+            trade_weight=0.02,
+            raid_weight=4.16,
+            guard_weight=0.02,
+            fire_weight=0.17,
+            build_priority=[],
+            convoy_bias=0.01,
+            ship_bias=0.89,
+            shipyard_bias=0.03,
+            fort_bias=0.03,
+            trade_guild_bias=0.00,
+            guard_captain_bias=0.08,
+            fire_plans_bias=0.00,
+            fishing_dock_bias=0.00,
+            fishing_boat_bias=0.90,
+            construction_idle_bias=0.46,
         ),
     ]
 
@@ -1161,7 +1480,12 @@ def load_strategy(strategy_path):
         fire_plans_bias=strategy_data.get("fire_plans_bias"),
         fishing_dock_bias=strategy_data.get("fishing_dock_bias"),
         fishing_boat_bias=strategy_data.get("fishing_boat_bias"),
+        dry_dock_bias=strategy_data.get("dry_dock_bias"),
+        repair_bias=strategy_data.get("repair_bias", 0.5),
         construction_idle_bias=strategy_data.get("construction_idle_bias", 0.0),
+        adaptive=strategy_data.get("adaptive", False),
+        adaptation_strength=strategy_data.get("adaptation_strength", 0.0),
+        adaptation_turns=strategy_data.get("adaptation_turns", 3),
     )
 
 
@@ -1430,6 +1754,8 @@ def random_evolving_strategy(rng, name="Evolving"):
         fire_plans_bias=rng.random(),
         fishing_dock_bias=rng.random(),
         fishing_boat_bias=rng.random(),
+        dry_dock_bias=rng.random(),
+        repair_bias=rng.random(),
         construction_idle_bias=rng.random(),
     )
 
@@ -1502,8 +1828,13 @@ def copy_strategy(strategy):
         fire_plans_bias=strategy.fire_plans_bias,
         fishing_dock_bias=strategy.fishing_dock_bias,
         fishing_boat_bias=strategy.fishing_boat_bias,
+        dry_dock_bias=strategy.dry_dock_bias,
+        repair_bias=strategy.repair_bias,
         construction_idle_bias=strategy.construction_idle_bias,
         opening_book=strategy.opening_book,
+        adaptive=strategy.adaptive,
+        adaptation_strength=strategy.adaptation_strength,
+        adaptation_turns=strategy.adaptation_turns,
     )
 
 
@@ -1529,13 +1860,32 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
         "fishing_dock_built": 0,
         "fishing_dock_active": 0,
         "fishing_boats_total": 0,
+        "dry_dock_started": 0,
+        "dry_dock_completed": 0,
+        "damaged_ships_total": 0,
+        "raid_actions_total": 0,
+        "raid_damage_events_total": 0,
+        "raid_repairs_total": 0,
+        "damaged_raiders_sunk_total": 0,
         "guard_captain_games": 0,
         "guard_captains_total": 0,
         "port_losses": 0,
+        "dominance_cap_penalty": 0,
+        "matchup_floor_penalty": 0,
+        "matchup_recovery_bonus": 0,
+        "port_loss_pressure_penalty": 0,
+        "survival_infra_bonus": 0,
+        "min_matchup_win_rate": 1.0,
         "fitness": 0,
     }
 
     for opponent in opponents:
+        matchup = {
+            "games": 0,
+            "wins": 0,
+            "ports": 0,
+        }
+        matchup_fitness_start = stats["fitness"]
         for game_index in range(games_per_opponent):
             if game_index % 2 == 0:
                 player_names = ["Evolving", opponent.name]
@@ -1554,6 +1904,7 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
             capped_margin = clamp(margin, -50, 50)
 
             stats["games"] += 1
+            matchup["games"] += 1
             stats["score_total"] += evolving_score
             stats["opponent_score_total"] += opponent_score
             stats["turns_total"] += result["turns"]
@@ -1563,10 +1914,14 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
                 stats["shipyard_started"] += 1
             if player.shipyard_completed:
                 stats["shipyard_completed"] += 1
+                stats["survival_infra_bonus"] += SURVIVAL_SHIPYARD_BONUS
+                stats["fitness"] += SURVIVAL_SHIPYARD_BONUS
             if player.fort_started or player.fort_completed:
                 stats["fort_started"] += 1
             if player.fort_completed:
                 stats["fort_completed"] += 1
+                stats["survival_infra_bonus"] += SURVIVAL_FORT_BONUS
+                stats["fitness"] += SURVIVAL_FORT_BONUS
             if player.trade_guild_started or player.trade_guild_completed:
                 stats["trade_guild_started"] += 1
             if player.trade_guild_completed:
@@ -1576,15 +1931,29 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
             if player.fishing_dock_built and not player.fishing_dock_disabled:
                 stats["fishing_dock_active"] += 1
             stats["fishing_boats_total"] += player.fishing_boats
+            if player.dry_dock_started or player.dry_dock_completed:
+                stats["dry_dock_started"] += 1
+            if player.dry_dock_completed:
+                stats["dry_dock_completed"] += 1
+            stats["damaged_ships_total"] += player.damaged_ships
+            stats["raid_actions_total"] += player.raid_actions_total
+            stats["raid_damage_events_total"] += player.raid_damage_events
+            stats["raid_repairs_total"] += player.raid_repairs_total
+            stats["damaged_raiders_sunk_total"] += player.damaged_raiders_sunk
             if player.guard_captains:
                 stats["guard_captain_games"] += 1
             stats["guard_captains_total"] += player.guard_captains
+            captain_bonus = player.guard_captains * SURVIVAL_GUARD_CAPTAIN_BONUS
+            stats["survival_infra_bonus"] += captain_bonus
+            stats["fitness"] += captain_bonus
 
             if result["winner_index"] == evolving_index:
                 stats["wins"] += 1
+                matchup["wins"] += 1
                 stats["fitness"] += 250
                 if result["win_type"] == "port":
                     stats["ports"] += 1
+                    matchup["ports"] += 1
                     stats["fitness"] += 40
             elif result["winner_index"] is None:
                 stats["draws"] += 1
@@ -1593,9 +1962,66 @@ def evaluate_strategy(strategy, opponents, games_per_opponent, rng):
                 stats["fitness"] -= 250
                 if result["win_type"] == "port":
                     stats["port_losses"] += 1
-                    stats["fitness"] -= 120
+                    port_loss_penalty = 120 + PORT_LOSS_PRESSURE_PENALTY
+                    stats["port_loss_pressure_penalty"] += PORT_LOSS_PRESSURE_PENALTY
+                    stats["fitness"] -= port_loss_penalty
 
+        matchup_fitness = stats["fitness"] - matchup_fitness_start
+        apply_matchup_pressure(stats, matchup, matchup_fitness)
+
+    apply_matchup_recovery_bonus(stats)
     return stats
+
+
+def apply_matchup_pressure(stats, matchup, matchup_fitness):
+    if matchup["games"] == 0:
+        return
+
+    win_rate = matchup["wins"] / matchup["games"]
+    stats["min_matchup_win_rate"] = min(stats["min_matchup_win_rate"], win_rate)
+
+    dominance_cap = matchup["games"] * DOMINANCE_CAP_PER_GAME
+    dominance_cap_penalty = max(0, matchup_fitness - dominance_cap)
+
+    floor_gap = max(0, MATCHUP_FLOOR_WIN_RATE - win_rate)
+    floor_penalty = int(floor_gap * matchup["games"] * MATCHUP_FLOOR_PENALTY)
+
+    stats["dominance_cap_penalty"] += dominance_cap_penalty
+    stats["matchup_floor_penalty"] += floor_penalty
+    stats["fitness"] -= dominance_cap_penalty + floor_penalty
+
+
+def apply_matchup_recovery_bonus(stats):
+    recovery_bonus = int(
+        stats["min_matchup_win_rate"] * MATCHUP_FLOOR_RECOVERY_BONUS
+    )
+    stats["matchup_recovery_bonus"] = recovery_bonus
+    stats["fitness"] += recovery_bonus
+
+
+def passes_robustness_gate(current_stats, candidate_stats):
+    current_min = current_stats.get("min_matchup_win_rate", 0)
+    candidate_min = candidate_stats.get("min_matchup_win_rate", 0)
+    fitness_gain = candidate_stats["fitness"] - current_stats["fitness"]
+    regression = current_min - candidate_min
+
+    if candidate_min >= current_min:
+        return True
+    if current_min >= MATCHUP_FLOOR_WIN_RATE and candidate_min >= MATCHUP_FLOOR_WIN_RATE:
+        return True
+    if regression <= ROBUSTNESS_ALLOWED_REGRESSION:
+        return True
+    if (
+        candidate_min >= MATCHUP_FLOOR_WIN_RATE
+        and fitness_gain >= ROBUSTNESS_REGRESSION_PREMIUM
+    ):
+        return True
+    if (
+        regression < ROBUSTNESS_CATASTROPHIC_REGRESSION
+        and fitness_gain >= ROBUSTNESS_REGRESSION_PREMIUM
+    ):
+        return True
+    return False
 
 
 def train_evolving_strategy(
@@ -1607,58 +2033,189 @@ def train_evolving_strategy(
     output_path=None,
     graph_path=None,
     history_path=None,
+    show_weights=False,
+    weights_interval=1,
+    dashboard=False,
+    dashboard_history=12,
+    dashboard_benchmark_games=100,
 ):
     learning_rate = clamp(learning_rate, 0.0, 1.0)
     rng = random.Random(seed)
     opponents = default_bot_strategies()
-    current = random_evolving_strategy(rng)
-    current_stats = evaluate_strategy(current, opponents, games_per_bot, rng)
+    current = None
+    current_stats = None
+    history = []
+    terminal_settings = prepare_dashboard_terminal(dashboard)
 
-    print(f"\n=== EVOLVING STRATEGY TRAINING: {generations} GENERATION(S) ===")
-    if seed is not None:
-        print(f"Seed: {seed}")
-    print(f"Learning rate: {learning_rate}, mutation scale: {mutation_scale}")
-    print_evolving_strategy("Initial random strategy", current, current_stats)
-    history = [
-        training_history_record(
-            generation=0,
-            status="initial",
-            stats=current_stats,
-            strategy=current,
-        )
-    ]
+    try:
+        print(f"\n=== EVOLVING STRATEGY TRAINING: {generations} GENERATION(S) ===")
+        if seed is not None:
+            print(f"Seed: {seed}")
+        print(f"Learning rate: {learning_rate}, mutation scale: {mutation_scale}")
 
-    for generation in range(1, generations + 1):
-        candidate = mutate_strategy(current, rng, mutation_scale)
-        candidate_stats = evaluate_strategy(candidate, opponents, games_per_bot, rng)
-
-        if candidate_stats["fitness"] > current_stats["fitness"]:
-            blended = blend_strategy(current, candidate, learning_rate)
-            blended_stats = evaluate_strategy(blended, opponents, games_per_bot, rng)
-            if blended_stats["fitness"] > current_stats["fitness"]:
-                current = blended
-                current_stats = blended_stats
-                status = "learned"
+        while True:
+            current = random_evolving_strategy(rng)
+            current_stats = evaluate_strategy(current, opponents, games_per_bot, rng)
+            plateau_generations = 0
+            dashboard_message = "Press h for controls."
+            recent_lines = []
+            if dashboard:
+                recent_lines.append(training_status_line(0, "initial", current_stats))
+                render_training_dashboard(
+                    generation=0,
+                    generations=generations,
+                    status="initial",
+                    stats=current_stats,
+                    strategy=current,
+                    recent_lines=recent_lines,
+                    learning_rate=learning_rate,
+                    mutation_scale=mutation_scale,
+                    games_per_bot=games_per_bot,
+                    plateau_generations=plateau_generations,
+                    dashboard_message=dashboard_message,
+                )
             else:
-                status = "kept"
-        else:
-            status = "kept"
+                print_evolving_strategy("Initial random strategy", current, current_stats)
+            history = [
+                training_history_record(
+                    generation=0,
+                    status="initial",
+                    stats=current_stats,
+                    strategy=current,
+                )
+            ]
+            start_new_run = False
 
-        print(
-            f"Gen {generation:>3}: {status:<7} "
-            f"fitness {current_stats['fitness']:>7.1f}, "
-            f"wins {current_stats['wins']:>3}/{current_stats['games']}, "
-            f"avg assets {average(current_stats, 'score_total'):>5.1f}"
-        )
-        history.append(
-            training_history_record(
-                generation=generation,
-                status=status,
-                stats=current_stats,
-                strategy=current,
-            )
-        )
+            for generation in range(1, generations + 1):
+                if dashboard:
+                    command_result = handle_dashboard_input(
+                        rng,
+                        opponents,
+                        current,
+                        current_stats,
+                        learning_rate,
+                        mutation_scale,
+                        games_per_bot,
+                    )
+                    (
+                        current,
+                        current_stats,
+                        learning_rate,
+                        mutation_scale,
+                        games_per_bot,
+                        dashboard_message,
+                        dashboard_command,
+                    ) = command_result
+                    if dashboard_command == "new":
+                        start_new_run = True
+                        break
+                    if dashboard_command == "restart":
+                        plateau_generations = 0
+                        recent_lines.append(
+                            training_status_line(generation - 1, "restart", current_stats)
+                        )
+                        recent_lines = recent_lines[-dashboard_history:]
+                        render_training_dashboard(
+                            generation=generation - 1,
+                            generations=generations,
+                            status="restart",
+                            stats=current_stats,
+                            strategy=current,
+                            recent_lines=recent_lines,
+                            learning_rate=learning_rate,
+                            mutation_scale=mutation_scale,
+                            games_per_bot=games_per_bot,
+                            plateau_generations=plateau_generations,
+                            dashboard_message=dashboard_message,
+                        )
 
+                candidate = mutate_strategy(current, rng, mutation_scale)
+                candidate_stats = evaluate_strategy(candidate, opponents, games_per_bot, rng)
+
+                if candidate_stats["fitness"] > current_stats["fitness"]:
+                    if not passes_robustness_gate(current_stats, candidate_stats):
+                        status = "fragile"
+                    else:
+                        blended = blend_strategy(current, candidate, learning_rate)
+                        blended_stats = evaluate_strategy(blended, opponents, games_per_bot, rng)
+                        if blended_stats["fitness"] > current_stats["fitness"]:
+                            if passes_robustness_gate(current_stats, blended_stats):
+                                current = blended
+                                current_stats = blended_stats
+                                status = "learned"
+                            else:
+                                status = "fragile"
+                        else:
+                            status = "kept"
+                else:
+                    status = "kept"
+
+                if status == "learned":
+                    plateau_generations = 0
+                else:
+                    plateau_generations += 1
+
+                status_line = training_status_line(generation, status, current_stats)
+                recent_lines.append(status_line)
+                recent_lines = recent_lines[-dashboard_history:]
+                if dashboard:
+                    render_training_dashboard(
+                        generation=generation,
+                        generations=generations,
+                        status=status,
+                        stats=current_stats,
+                        strategy=current,
+                        recent_lines=recent_lines,
+                        learning_rate=learning_rate,
+                        mutation_scale=mutation_scale,
+                        games_per_bot=games_per_bot,
+                        plateau_generations=plateau_generations,
+                        dashboard_message=dashboard_message,
+                    )
+                else:
+                    print(status_line)
+                    if should_print_live_weights(show_weights, weights_interval, generation, status):
+                        print(f"         {strategy_compact_line(current)}")
+                history.append(
+                    training_history_record(
+                        generation=generation,
+                        status=status,
+                        stats=current_stats,
+                        strategy=current,
+                    )
+                )
+
+            if start_new_run:
+                continue
+
+            if dashboard:
+                finish_choice = wait_for_dashboard_finish_choice(
+                    rng=rng,
+                    opponents=opponents,
+                    terminal_settings=terminal_settings,
+                    generation=generations,
+                    generations=generations,
+                    stats=current_stats,
+                    strategy=current,
+                    recent_lines=recent_lines,
+                    learning_rate=learning_rate,
+                    mutation_scale=mutation_scale,
+                    games_per_bot=games_per_bot,
+                    plateau_generations=plateau_generations,
+                    benchmark_games=dashboard_benchmark_games,
+                    seed=seed,
+                    history=history,
+                )
+                if finish_choice == "new":
+                    continue
+                break
+            else:
+                break
+    finally:
+        restore_dashboard_terminal(terminal_settings)
+
+    if dashboard:
+        print()
     print_evolving_strategy("Final evolved strategy", current, current_stats)
     if output_path is not None:
         write_evolved_strategy(current, current_stats, output_path, seed, history)
@@ -1668,6 +2225,393 @@ def train_evolving_strategy(
         write_training_graph(history, graph_path)
 
     return current
+
+
+def training_status_line(generation, status, stats):
+    return (
+        f"Gen {generation:>3}: {status:<7} "
+        f"fitness {stats['fitness']:>7.1f}, "
+        f"wins {stats['wins']:>3}/{stats['games']}, "
+        f"min matchup {stats['min_matchup_win_rate'] * 100:>4.0f}%, "
+        f"avg assets {average(stats, 'score_total'):>5.1f}"
+    )
+
+
+def should_print_live_weights(show_weights, weights_interval, generation, status):
+    if not show_weights:
+        return False
+    if status == "learned":
+        return True
+    if weights_interval <= 0:
+        return False
+    return generation % weights_interval == 0
+
+
+def strategy_compact_line(strategy):
+    return (
+        "weights "
+        f"T/R/G/F={strategy.trade_weight:.2f}/"
+        f"{strategy.raid_weight:.2f}/"
+        f"{strategy.guard_weight:.2f}/"
+        f"{strategy.fire_weight:.2f}; "
+        "buy "
+        f"convoy={strategy.convoy_bias:.2f}, "
+        f"ship={strategy.ship_bias:.2f}; "
+        "infra "
+        f"yard={strategy.shipyard_bias:.2f}, "
+        f"fort={strategy.fort_bias:.2f}, "
+        f"guild={strategy.trade_guild_bias:.2f}, "
+        f"dock={strategy.fishing_dock_bias:.2f}, "
+        f"boat={strategy.fishing_boat_bias:.2f}, "
+        f"dry={strategy.dry_dock_bias:.2f}, "
+        f"repair={strategy.repair_bias:.2f}, "
+        f"idle={strategy.construction_idle_bias:.2f}; "
+        f"priority={strategy.build_priority}"
+    )
+
+
+def prepare_dashboard_terminal(dashboard):
+    if not dashboard or not sys.stdin.isatty():
+        return None
+    settings = termios.tcgetattr(sys.stdin)
+    tty.setcbreak(sys.stdin.fileno())
+    return settings
+
+
+def restore_dashboard_terminal(settings):
+    if settings is not None:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+
+
+def handle_dashboard_input(
+    rng,
+    opponents,
+    current,
+    current_stats,
+    learning_rate,
+    mutation_scale,
+    games_per_bot,
+):
+    key = read_dashboard_key()
+    if key is None:
+        return (
+            current,
+            current_stats,
+            learning_rate,
+            mutation_scale,
+            games_per_bot,
+            "Press h for controls.",
+            "none",
+        )
+
+    if key == "[":
+        learning_rate = clamp(learning_rate - 0.01, 0.0, 1.0)
+        message = f"learning rate lowered to {learning_rate:.2f}"
+    elif key == "]":
+        learning_rate = clamp(learning_rate + 0.01, 0.0, 1.0)
+        message = f"learning rate raised to {learning_rate:.2f}"
+    elif key == "-":
+        mutation_scale = max(0.0, mutation_scale - 0.05)
+        message = f"mutation scale lowered to {mutation_scale:.2f}"
+    elif key in {"+", "="}:
+        mutation_scale += 0.05
+        message = f"mutation scale raised to {mutation_scale:.2f}"
+    elif key == "g":
+        games_per_bot = max(1, games_per_bot - 5)
+        message = f"training games lowered to {games_per_bot}"
+    elif key == "G":
+        games_per_bot += 5
+        message = f"training games raised to {games_per_bot}"
+    elif key == "r":
+        current = random_evolving_strategy(rng)
+        current_stats = evaluate_strategy(current, opponents, games_per_bot, rng)
+        message = "restarted from a fresh random strategy"
+        return (
+            current,
+            current_stats,
+            learning_rate,
+            mutation_scale,
+            games_per_bot,
+            message,
+            "restart",
+        )
+    elif key in {"n", "N"}:
+        return (
+            current,
+            current_stats,
+            learning_rate,
+            mutation_scale,
+            games_per_bot,
+            "starting a new run",
+            "new",
+        )
+    elif key == "h":
+        message = "controls: [] lr, -/+ mutation, g/G games, r restart, n new run"
+    else:
+        message = f"ignored key {key!r}; press h for controls"
+
+    return (
+        current,
+        current_stats,
+        learning_rate,
+        mutation_scale,
+        games_per_bot,
+        message,
+        "none",
+    )
+
+
+def read_dashboard_key():
+    if not sys.stdin.isatty():
+        return None
+    readable, _, _ = select.select([sys.stdin], [], [], 0)
+    if not readable:
+        return None
+    return sys.stdin.read(1)
+
+
+def wait_for_dashboard_finish_choice(
+    rng,
+    opponents,
+    terminal_settings,
+    generation,
+    generations,
+    stats,
+    strategy,
+    recent_lines,
+    learning_rate,
+    mutation_scale,
+    games_per_bot,
+    plateau_generations,
+    benchmark_games,
+    seed,
+    history,
+):
+    if not sys.stdin.isatty():
+        return "save"
+
+    message = "finished: b benchmark, w write file, s save+exit, n new run"
+    benchmark_rows = None
+    while True:
+        render_training_dashboard(
+            generation=generation,
+            generations=generations,
+            status="finished",
+            stats=stats,
+            strategy=strategy,
+            recent_lines=recent_lines,
+            learning_rate=learning_rate,
+            mutation_scale=mutation_scale,
+            games_per_bot=games_per_bot,
+            plateau_generations=plateau_generations,
+            dashboard_message=message,
+            finished=True,
+            benchmark_games=benchmark_games,
+            benchmark_rows=benchmark_rows,
+        )
+        key = sys.stdin.read(1)
+        if key in {"s", "S", "\r", "\n"}:
+            return "save"
+        if key in {"n", "N", "r", "R"}:
+            return "new"
+        if key in {"w", "W"}:
+            output_path = prompt_dashboard_line(
+                terminal_settings,
+                "\nSave current strategy as JSON file: ",
+            )
+            if output_path:
+                write_evolved_strategy(strategy, stats, output_path, seed, history)
+                message = f"saved checkpoint to {output_path}"
+            else:
+                message = "save cancelled"
+        elif key in {"b", "B"}:
+            render_training_dashboard(
+                generation=generation,
+                generations=generations,
+                status="benchmarking",
+                stats=stats,
+                strategy=strategy,
+                recent_lines=recent_lines,
+                learning_rate=learning_rate,
+                mutation_scale=mutation_scale,
+                games_per_bot=games_per_bot,
+                plateau_generations=plateau_generations,
+                dashboard_message=f"running benchmark: {benchmark_games} games/opponent",
+                finished=True,
+                benchmark_games=benchmark_games,
+                benchmark_rows=benchmark_rows,
+            )
+            benchmark_rows = benchmark_strategy(strategy, opponents, benchmark_games, rng)
+            message = "benchmark complete: b rerun, w write file, s save+exit, n new run"
+        else:
+            message = "press b benchmark, w write file, s save+exit, or n new run"
+
+
+def prompt_dashboard_line(terminal_settings, prompt):
+    restore_dashboard_terminal(terminal_settings)
+    try:
+        return input(prompt).strip()
+    finally:
+        if terminal_settings is not None:
+            tty.setcbreak(sys.stdin.fileno())
+
+
+def benchmark_strategy(strategy, opponents, games_per_opponent, rng):
+    return [
+        evaluate_head_to_head(strategy, opponent, games_per_opponent, rng)
+        for opponent in opponents
+    ]
+
+
+def gauge(value, minimum, maximum, width=18):
+    if maximum <= minimum:
+        ratio = 0.0
+    else:
+        ratio = (value - minimum) / (maximum - minimum)
+    ratio = clamp(ratio, 0.0, 1.0)
+    filled = round(ratio * width)
+    return "[" + "#" * filled + "." * (width - filled) + "]"
+
+
+def render_training_dashboard(
+    generation,
+    generations,
+    status,
+    stats,
+    strategy,
+    recent_lines,
+    learning_rate,
+    mutation_scale,
+    games_per_bot,
+    plateau_generations,
+    dashboard_message,
+    finished=False,
+    benchmark_games=None,
+    benchmark_rows=None,
+):
+    print("\033[2J\033[H", end="")
+    print(f"=== EVOLVING STRATEGY DASHBOARD ({generation}/{generations}) ===")
+    win_rate = stats["wins"] / stats["games"] if stats["games"] else 0
+    min_matchup = stats.get("min_matchup_win_rate", 0)
+    avg_assets = average(stats, "score_total")
+    print(
+        f"status={status}  "
+        f"plateau={plateau_generations} gen  "
+        f"fitness={stats['fitness']:.1f}  "
+        f"wins={stats['wins']}/{stats['games']} ({win_rate * 100:.1f}%)  "
+        f"min={min_matchup * 100:.1f}%  "
+        f"assets={avg_assets:.1f}  "
+        f"opp={average(stats, 'opponent_score_total'):.1f}"
+    )
+    print(
+        f"knobs: lr={learning_rate:.2f}  mutation={mutation_scale:.2f}  "
+        f"games/opponent={games_per_bot}  message={dashboard_message}"
+    )
+    print(
+        f"gauges: win {gauge(win_rate, 0, 1)}  "
+        f"min {gauge(min_matchup, 0, 1)}  "
+        f"plateau {gauge(min(plateau_generations, 100), 0, 100)}"
+    )
+    print(
+        f"ports={stats['ports']}  "
+        f"port_losses={stats.get('port_losses', 0)}  "
+        f"damage={average(stats, 'raid_damage_events_total'):.1f}/game  "
+        f"repairs={average(stats, 'raid_repairs_total'):.1f}/game  "
+        f"sunk_damaged={average(stats, 'damaged_raiders_sunk_total'):.1f}/game"
+    )
+    print()
+    print(
+        "orders: "
+        f"trade={strategy.trade_weight:.2f}  "
+        f"raid={strategy.raid_weight:.2f}  "
+        f"guard={strategy.guard_weight:.2f}  "
+        f"fire={strategy.fire_weight:.2f}"
+    )
+    print(
+        "buy:    "
+        f"convoy={strategy.convoy_bias:.2f}  "
+        f"ship={strategy.ship_bias:.2f}  "
+        f"idle={strategy.construction_idle_bias:.2f}  "
+        f"repair={strategy.repair_bias:.2f}"
+    )
+    print(
+        "infra:  "
+        f"yard={strategy.shipyard_bias:.2f}  "
+        f"fort={strategy.fort_bias:.2f}  "
+        f"guild={strategy.trade_guild_bias:.2f}  "
+        f"captain={strategy.guard_captain_bias:.2f}  "
+        f"fire_plans={strategy.fire_plans_bias:.2f}"
+    )
+    print(
+        "econ:   "
+        f"fishing_dock={strategy.fishing_dock_bias:.2f}  "
+        f"boat={strategy.fishing_boat_bias:.2f}  "
+        f"dry_dock={strategy.dry_dock_bias:.2f}"
+    )
+    print(f"priority: {strategy.build_priority}")
+    print()
+    if finished:
+        print("controls: b benchmark  w write file  s save+exit  n new run")
+    else:
+        print("controls: [] lr  -/+ mutation  g/G games  r restart  n new run  h help")
+    print("recent:")
+    for line in recent_lines:
+        print(f"  {line}")
+    if finished:
+        print()
+        print(f"benchmark games/opponent: {benchmark_games}")
+        if benchmark_rows is None:
+            print("benchmark: not run yet")
+        else:
+            print("benchmark:")
+            for line in dashboard_benchmark_lines(benchmark_rows):
+                print(f"  {line}")
+    print(flush=True)
+
+
+def dashboard_benchmark_lines(rows, weakest_count=8):
+    total = defaultdict(int)
+    for row in rows:
+        for key in [
+            "games",
+            "wins",
+            "losses",
+            "draws",
+            "port_wins",
+            "port_losses",
+            "turns_total",
+            "score_total",
+            "opponent_score_total",
+        ]:
+            total[key] += row[key]
+
+    total_games = total["games"]
+    total_win_rate = total["wins"] / total_games if total_games else 0
+    total_avg_assets = total["score_total"] / total_games if total_games else 0
+    lines = [
+        f"TOTAL {total['wins']}/{total_games} "
+        f"({total_win_rate * 100:.1f}%)  "
+        f"port losses {total['port_losses']}  "
+        f"avg assets {total_avg_assets:.1f}"
+    ]
+
+    weakest = sorted(
+        rows,
+        key=lambda row: (
+            row["wins"] / row["games"] if row["games"] else 0,
+            -row["port_losses"],
+        ),
+    )[:weakest_count]
+    for row in weakest:
+        games = row["games"]
+        win_rate = row["wins"] / games if games else 0
+        avg_assets = row["score_total"] / games if games else 0
+        lines.append(
+            f"{row['opponent']:<15} {win_rate * 100:>5.1f}%  "
+            f"W/L/D {row['wins']}/{row['losses']}/{row['draws']}  "
+            f"PL {row['port_losses']}  assets {avg_assets:.1f}"
+        )
+    return lines
 
 
 def print_evolving_strategy(label, strategy, stats):
@@ -1689,22 +2633,41 @@ def print_evolving_strategy(label, strategy, stats):
         f"fire_plans={strategy.fire_plans_bias:.2f}, "
         f"fishing_dock={strategy.fishing_dock_bias:.2f}, "
         f"fishing_boat={strategy.fishing_boat_bias:.2f}, "
+        f"dry_dock={strategy.dry_dock_bias:.2f}, "
+        f"repair={strategy.repair_bias:.2f}, "
         f"idle={strategy.construction_idle_bias:.2f}"
     )
     print(
         f"  results: fitness={stats['fitness']:.1f}, "
         f"wins={stats['wins']}/{stats['games']}, draws={stats['draws']}, "
         f"port wins={stats['ports']}, port losses={stats.get('port_losses', 0)}, "
+        f"min matchup={stats.get('min_matchup_win_rate', 0) * 100:.1f}%, "
         f"avg turns={average(stats, 'turns_total'):.1f}, "
         f"avg assets={average(stats, 'score_total'):.1f}, "
         f"avg opponent={average(stats, 'opponent_score_total'):.1f}"
+    )
+    print(
+        f"  matchup pressure: dominance cap={stats.get('dominance_cap_penalty', 0)}, "
+        f"floor penalty={stats.get('matchup_floor_penalty', 0)}, "
+        f"recovery bonus={stats.get('matchup_recovery_bonus', 0)}"
+    )
+    print(
+        f"  survival pressure: port loss penalty="
+        f"{stats.get('port_loss_pressure_penalty', 0)}, "
+        f"infra bonus={stats.get('survival_infra_bonus', 0)}"
     )
     print(
         f"  infra use: forts {stats.get('fort_completed', 0)}/{stats['games']}, "
         f"shipyards {stats.get('shipyard_completed', 0)}/{stats['games']}, "
         f"guilds {stats.get('trade_guild_completed', 0)}/{stats['games']}, "
         f"fishing docks {stats.get('fishing_dock_active', 0)}/{stats['games']}, "
+        f"dry docks {stats.get('dry_dock_completed', 0)}/{stats['games']}, "
         f"boats avg {average(stats, 'fishing_boats_total'):.1f}, "
+        f"raid actions avg {average(stats, 'raid_actions_total'):.1f}, "
+        f"damage events avg {average(stats, 'raid_damage_events_total'):.1f}, "
+        f"repairs avg {average(stats, 'raid_repairs_total'):.1f}, "
+        f"sunk damaged avg {average(stats, 'damaged_raiders_sunk_total'):.1f}, "
+        f"damaged avg {average(stats, 'damaged_ships_total'):.1f}, "
         f"captains {stats.get('guard_captain_games', 0)}/{stats['games']} "
         f"(avg {average(stats, 'guard_captains_total'):.1f})"
     )
@@ -1726,6 +2689,12 @@ def training_history_record(generation, status, stats, strategy):
         "draws": stats["draws"],
         "port_wins": stats["ports"],
         "port_losses": stats.get("port_losses", 0),
+        "dominance_cap_penalty": stats.get("dominance_cap_penalty", 0),
+        "matchup_floor_penalty": stats.get("matchup_floor_penalty", 0),
+        "matchup_recovery_bonus": stats.get("matchup_recovery_bonus", 0),
+        "port_loss_pressure_penalty": stats.get("port_loss_pressure_penalty", 0),
+        "survival_infra_bonus": stats.get("survival_infra_bonus", 0),
+        "min_matchup_win_rate": stats.get("min_matchup_win_rate", 0),
         "win_rate": stats["wins"] / stats["games"] if stats["games"] else 0,
         "avg_turns": average(stats, "turns_total"),
         "avg_assets": average(stats, "score_total"),
@@ -1739,6 +2708,13 @@ def training_history_record(generation, status, stats, strategy):
         "fishing_dock_built_rate": average(stats, "fishing_dock_built"),
         "fishing_dock_active_rate": average(stats, "fishing_dock_active"),
         "avg_fishing_boats": average(stats, "fishing_boats_total"),
+        "dry_dock_started_rate": average(stats, "dry_dock_started"),
+        "dry_dock_completed_rate": average(stats, "dry_dock_completed"),
+        "avg_damaged_ships": average(stats, "damaged_ships_total"),
+        "avg_raid_actions": average(stats, "raid_actions_total"),
+        "avg_raid_damage_events": average(stats, "raid_damage_events_total"),
+        "avg_raid_repairs": average(stats, "raid_repairs_total"),
+        "avg_damaged_raiders_sunk": average(stats, "damaged_raiders_sunk_total"),
         "guard_captain_rate": average(stats, "guard_captain_games"),
         "avg_guard_captains": average(stats, "guard_captains_total"),
         "strategy": strategy_record(strategy),
@@ -1792,6 +2768,12 @@ def write_training_history_csv(history, history_path):
         "draws",
         "port_wins",
         "port_losses",
+        "dominance_cap_penalty",
+        "matchup_floor_penalty",
+        "matchup_recovery_bonus",
+        "port_loss_pressure_penalty",
+        "survival_infra_bonus",
+        "min_matchup_win_rate",
         "win_rate",
         "avg_turns",
         "avg_assets",
@@ -1805,6 +2787,13 @@ def write_training_history_csv(history, history_path):
         "fishing_dock_built_rate",
         "fishing_dock_active_rate",
         "avg_fishing_boats",
+        "dry_dock_started_rate",
+        "dry_dock_completed_rate",
+        "avg_damaged_ships",
+        "avg_raid_actions",
+        "avg_raid_damage_events",
+        "avg_raid_repairs",
+        "avg_damaged_raiders_sunk",
         "guard_captain_rate",
         "avg_guard_captains",
         "trade_weight",
@@ -1818,6 +2807,8 @@ def write_training_history_csv(history, history_path):
         "trade_guild_bias",
         "fishing_dock_bias",
         "fishing_boat_bias",
+        "dry_dock_bias",
+        "repair_bias",
         "guard_captain_bias",
         "fire_plans_bias",
         "construction_idle_bias",
@@ -1837,6 +2828,12 @@ def write_training_history_csv(history, history_path):
                 row["draws"],
                 row["port_wins"],
                 row["port_losses"],
+                row["dominance_cap_penalty"],
+                row["matchup_floor_penalty"],
+                row["matchup_recovery_bonus"],
+                row["port_loss_pressure_penalty"],
+                row["survival_infra_bonus"],
+                f"{row['min_matchup_win_rate']:.6f}",
                 f"{row['win_rate']:.6f}",
                 f"{row['avg_turns']:.6f}",
                 f"{row['avg_assets']:.6f}",
@@ -1850,6 +2847,13 @@ def write_training_history_csv(history, history_path):
                 f"{row['fishing_dock_built_rate']:.6f}",
                 f"{row['fishing_dock_active_rate']:.6f}",
                 f"{row['avg_fishing_boats']:.6f}",
+                f"{row['dry_dock_started_rate']:.6f}",
+                f"{row['dry_dock_completed_rate']:.6f}",
+                f"{row['avg_damaged_ships']:.6f}",
+                f"{row['avg_raid_actions']:.6f}",
+                f"{row['avg_raid_damage_events']:.6f}",
+                f"{row['avg_raid_repairs']:.6f}",
+                f"{row['avg_damaged_raiders_sunk']:.6f}",
                 f"{row['guard_captain_rate']:.6f}",
                 f"{row['avg_guard_captains']:.6f}",
                 f"{strategy['trade_weight']:.6f}",
@@ -1863,6 +2867,8 @@ def write_training_history_csv(history, history_path):
                 f"{strategy['trade_guild_bias']:.6f}",
                 f"{strategy['fishing_dock_bias']:.6f}",
                 f"{strategy['fishing_boat_bias']:.6f}",
+                f"{strategy['dry_dock_bias']:.6f}",
+                f"{strategy['repair_bias']:.6f}",
                 f"{strategy['guard_captain_bias']:.6f}",
                 f"{strategy['fire_plans_bias']:.6f}",
                 f"{strategy['construction_idle_bias']:.6f}",
@@ -1976,7 +2982,12 @@ def strategy_record(strategy):
         "fire_plans_bias": strategy.fire_plans_bias,
         "fishing_dock_bias": strategy.fishing_dock_bias,
         "fishing_boat_bias": strategy.fishing_boat_bias,
+        "dry_dock_bias": strategy.dry_dock_bias,
+        "repair_bias": strategy.repair_bias,
         "construction_idle_bias": strategy.construction_idle_bias,
+        "adaptive": strategy.adaptive,
+        "adaptation_strength": strategy.adaptation_strength,
+        "adaptation_turns": strategy.adaptation_turns,
     }
 
 

@@ -82,7 +82,7 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.33"
+    VERSION = "0.34"
     STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -114,6 +114,11 @@ class Rules:
     FISHING_BOAT_COST = 2
     FISHING_BOAT_INCOME = 1
     FISHING_BOAT_ASSET_VALUE = 2
+    RAID_ACTIONS_PER_DAMAGE = 10
+    RAID_REPAIR_COST = 4
+    SHIPYARD_RAID_REPAIR_COST = 1
+    DRY_DOCK_COST = 3
+    DRY_DOCK_LABOR_REQUIRED = 2
     MAX_TURNS = 12
     MONTHS = [
         "January",
@@ -209,6 +214,14 @@ class Nation:
         self.fishing_dock_built = False
         self.fishing_dock_disabled = False
         self.fishing_boats = 0
+        self.raid_actions_total = 0
+        self.damaged_ships = 0
+        self.raid_damage_events = 0
+        self.raid_repairs_total = 0
+        self.damaged_raiders_sunk = 0
+        self.dry_dock_started = False
+        self.dry_dock_labor = 0
+        self.dry_dock_completed = False
 
     def status_report(self):
         print(
@@ -226,6 +239,8 @@ class Nation:
         print(f"  {UI.field('Fort')} {self.fort_status}")
         print(f"  {UI.field('Trade guild')} {self.trade_guild_status}")
         print(f"  {UI.field('Fishing')} {self.fishing_status}")
+        print(f"  {UI.field('Raid fatigue')} {self.raid_fatigue_status}")
+        print(f"  {UI.field('Dry dock')} {self.dry_dock_status}")
         print(f"  {UI.field('Fire ships')} {self.fire_ship_status}")
         print(f"  {UI.field('Guard captains')} {self.guard_captain_status}")
 
@@ -292,6 +307,10 @@ class Nation:
         self.gold -= Rules.TRADE_GUILD_COST
         self.trade_guild_started = True
 
+    def start_dry_dock(self):
+        self.gold -= Rules.DRY_DOCK_COST
+        self.dry_dock_started = True
+
     def destroy_shipyard(self):
         self.shipyard_started = False
         self.shipyard_completed = False
@@ -343,6 +362,43 @@ class Nation:
             self.trade_guild_completed = True
 
         return applied_labor
+
+    def add_dry_dock_labor(self, labor):
+        if not self.dry_dock_started or self.dry_dock_completed or labor <= 0:
+            return 0
+
+        remaining_labor = Rules.DRY_DOCK_LABOR_REQUIRED - self.dry_dock_labor
+        applied_labor = min(labor, remaining_labor)
+        self.dry_dock_labor += applied_labor
+
+        if self.dry_dock_labor >= Rules.DRY_DOCK_LABOR_REQUIRED:
+            self.dry_dock_completed = True
+
+        return applied_labor
+
+    def record_raid_actions(self, raid_actions):
+        if raid_actions <= 0:
+            return 0
+
+        previous_total = self.raid_actions_total
+        self.raid_actions_total += raid_actions
+        previous_damage = previous_total // Rules.RAID_ACTIONS_PER_DAMAGE
+        new_damage = self.raid_actions_total // Rules.RAID_ACTIONS_PER_DAMAGE
+        damage_added = max(0, new_damage - previous_damage)
+        if damage_added:
+            self.raid_damage_events += damage_added
+            self.damaged_ships = min(self.ships, self.damaged_ships + damage_added)
+        return damage_added
+
+    def cap_damaged_ships(self):
+        self.damaged_ships = min(self.damaged_ships, max(0, self.ships))
+
+    def repair_damaged_ships(self, amount):
+        repaired = min(amount, self.damaged_ships)
+        self.gold -= repaired * self.raid_repair_cost
+        self.damaged_ships -= repaired
+        self.raid_repairs_total += repaired
+        return repaired
 
     def reset_fort_fire_blocks(self):
         if self.fort_completed:
@@ -406,6 +462,14 @@ class Nation:
         if self.fort_completed:
             return self.guard_captains * Rules.GUARD_CAPTAIN_PORT_DEFENSE
         return 0
+
+    @property
+    def raid_repair_cost(self):
+        if self.dry_dock_completed:
+            return 0
+        if self.shipyard_completed:
+            return Rules.SHIPYARD_RAID_REPAIR_COST
+        return Rules.RAID_REPAIR_COST
 
     @property
     def asset_score(self):
@@ -539,6 +603,29 @@ class Nation:
             )
         return f"{status}, confiscates {confiscations} smuggle gold"
 
+    @property
+    def raid_fatigue_status(self):
+        progress = self.raid_actions_total % Rules.RAID_ACTIONS_PER_DAMAGE
+        return (
+            f"{self.damaged_ships} damaged ship(s), "
+            f"{progress}/{Rules.RAID_ACTIONS_PER_DAMAGE} toward next damage, "
+            f"repair {self.raid_repair_cost} gold each"
+        )
+
+    @property
+    def dry_dock_status(self):
+        if self.dry_dock_completed:
+            return "completed, raid repairs are free"
+        if self.dry_dock_started:
+            return (
+                f"under construction, {self.dry_dock_labor}/"
+                f"{Rules.DRY_DOCK_LABOR_REQUIRED} labor"
+            )
+        return (
+            f"not started ({Rules.DRY_DOCK_COST} gold, "
+            f"{Rules.DRY_DOCK_LABOR_REQUIRED} labor, requires shipyard)"
+        )
+
     def launch_treasure(self):
         self.treasure_turns_remaining = Rules.TREASURE_TRAVEL_TURNS
 
@@ -575,6 +662,7 @@ class Nation:
         self.payroll_turns_remaining = 0
         mutiny_losses = self.calculate_mutiny_losses()
         self.ships -= mutiny_losses
+        self.cap_damaged_ships()
         return payout, mutiny_losses
 
     def calculate_mutiny_losses(self):
@@ -594,6 +682,7 @@ class Game:
         self.game_over = False
         self.port_destroyer = None
         self.port_destroyed = None
+        self.damaged_raider_cleanup = {}
 
     def play(self):
         UI.section(f"SEALED ORDERS v{Rules.VERSION}", "magenta")
@@ -650,6 +739,8 @@ class Game:
             "fort_status": player.fort_status,
             "trade_guild_status": player.trade_guild_status,
             "fishing_status": player.fishing_status,
+            "raid_fatigue_status": player.raid_fatigue_status,
+            "dry_dock_status": player.dry_dock_status,
             "fire_ship_status": player.fire_ship_status,
             "guard_captain_status": player.guard_captain_status,
             "allocation": Allocation(
@@ -680,6 +771,13 @@ class Game:
             self.print_status_change("Fort", before, after, "fort_status")
             self.print_status_change("Trade guild", before, after, "trade_guild_status")
             self.print_status_change("Fishing", before, after, "fishing_status")
+            self.print_status_change(
+                "Raid fatigue",
+                before,
+                after,
+                "raid_fatigue_status",
+            )
+            self.print_status_change("Dry dock", before, after, "dry_dock_status")
             self.print_status_change("Fire ships", before, after, "fire_ship_status")
             self.print_status_change(
                 "Guard captains",
@@ -791,6 +889,7 @@ class Game:
     def resolve_orders(self):
         UI.section("RESOLUTION", "red")
         player_one, player_two = self.players
+        self.damaged_raider_cleanup = {}
         for player in self.players:
             player.reset_fort_fire_blocks()
 
@@ -798,9 +897,13 @@ class Game:
             player: max(0, player.ships - player.allocation.total)
             for player in self.players
         }
+        for player in self.players:
+            self.apply_raid_fatigue(player)
 
         self.resolve_fire_ships(attacker=player_one, defender=player_two)
         self.resolve_fire_ships(attacker=player_two, defender=player_one)
+        self.prepare_damaged_raider_cleanup(raider=player_one, guarder=player_two)
+        self.prepare_damaged_raider_cleanup(raider=player_two, guarder=player_one)
         self.resolve_raid_guard_battle(raider=player_one, guarder=player_two)
         self.resolve_raid_guard_battle(raider=player_two, guarder=player_one)
 
@@ -811,6 +914,8 @@ class Game:
 
         result_one = self.resolve_income(trader=player_one, opponent=player_two)
         result_two = self.resolve_income(trader=player_two, opponent=player_one)
+        self.resolve_damaged_raider_cleanup(raider=player_one, guarder=player_two)
+        self.resolve_damaged_raider_cleanup(raider=player_two, guarder=player_one)
 
         player_one_income = (
             result_one.trade_income
@@ -860,6 +965,8 @@ class Game:
         defender.allocation.guard -= burned_guards
         attacker.ships -= burned_guards
         defender.ships -= burned_guards
+        attacker.cap_damaged_ships()
+        defender.cap_damaged_ships()
 
         if burned_guards:
             print(
@@ -882,6 +989,7 @@ class Game:
                 blocked_fire = 1
                 attacker.allocation.fire -= blocked_fire
                 attacker.ships -= blocked_fire
+                attacker.cap_damaged_ships()
                 print(
                     f" - {defender.name}'s fort blocks 1 fire ship "
                     "before it reaches the shipyard."
@@ -892,6 +1000,7 @@ class Game:
             shipyard_attack = 1
             attacker.allocation.fire -= shipyard_attack
             attacker.ships -= shipyard_attack
+            attacker.cap_damaged_ships()
             defender.destroy_shipyard()
             print(
                 f" - 1 fire ship reaches port and destroys "
@@ -907,6 +1016,7 @@ class Game:
             fishing_dock_attack = 1
             attacker.allocation.fire -= fishing_dock_attack
             attacker.ships -= fishing_dock_attack
+            attacker.cap_damaged_ships()
             defender.disable_fishing_dock()
             print(
                 f" - 1 fire ship burns {defender.name}'s fishing docks. "
@@ -959,6 +1069,14 @@ class Game:
         guarder.allocation.guard -= engaged_ships
         raider.ships -= raider_losses
         guarder.ships -= guarder_losses
+        raider.cap_damaged_ships()
+        guarder.cap_damaged_ships()
+        self.record_damaged_raider_battle_losses(
+            raider,
+            guarder,
+            raider_losses,
+            guarder_losses,
+        )
 
         if raider_losses == 0 and guarder_losses == 0:
             print(" - Even light forces disengage. No ships sink or reach trade.")
@@ -968,6 +1086,61 @@ class Game:
             print(f" - {raider.name} loses {raider_losses} raid ship(s).")
         if guarder_losses:
             print(f" - {guarder.name} loses {guarder_losses} guard ship(s).")
+
+    def apply_raid_fatigue(self, player):
+        damage_added = player.record_raid_actions(player.allocation.raid)
+        if damage_added:
+            print(
+                f"\n{player.name}'s raiders strain their hulls: "
+                f"{damage_added} ship(s) become damaged "
+                f"({player.damaged_ships} damaged total)."
+            )
+
+    def prepare_damaged_raider_cleanup(self, raider, guarder):
+        self.damaged_raider_cleanup[(raider, guarder)] = {
+            "damaged_raiders": min(raider.damaged_ships, raider.allocation.raid),
+            "surviving_guards": guarder.allocation.guard,
+        }
+
+    def record_damaged_raider_battle_losses(
+        self,
+        raider,
+        guarder,
+        raider_losses,
+        guarder_losses,
+    ):
+        cleanup = self.damaged_raider_cleanup.get((raider, guarder))
+        if cleanup is None:
+            return
+
+        cleanup["damaged_raiders"] = max(
+            0,
+            cleanup["damaged_raiders"] - raider_losses,
+        )
+        cleanup["surviving_guards"] = max(
+            0,
+            cleanup["surviving_guards"] - guarder_losses,
+        )
+
+    def resolve_damaged_raider_cleanup(self, raider, guarder):
+        cleanup = self.damaged_raider_cleanup.get((raider, guarder), {})
+        damaged_active_raiders = min(
+            cleanup.get("damaged_raiders", 0),
+            raider.damaged_ships,
+        )
+        surviving_guards = cleanup.get("surviving_guards", 0)
+        losses = min(damaged_active_raiders, surviving_guards)
+        if losses <= 0:
+            return
+
+        raider.allocation.raid = max(0, raider.allocation.raid - losses)
+        raider.ships -= losses
+        raider.damaged_ships -= losses
+        raider.damaged_raiders_sunk += losses
+        print(
+            f"\n{guarder.name}'s remaining guards catch damaged raiders: "
+            f"{losses} damaged ship(s) from {raider.name} sink."
+        )
 
     def calculate_overwhelming_losses(self, stronger, weaker, engaged_ships):
         if stronger >= weaker * 2:
@@ -1128,6 +1301,8 @@ class Game:
             trade_guild_labor = player.add_trade_guild_labor(port_labor)
             port_labor -= trade_guild_labor
             fishing_dock_labor = player.add_fishing_dock_labor(port_labor)
+            port_labor -= fishing_dock_labor
+            dry_dock_labor = player.add_dry_dock_labor(port_labor)
 
             if shipyard_labor:
                 any_labor = True
@@ -1173,6 +1348,19 @@ class Game:
                         "Fishing boats can now be bought."
                     )
 
+            if dry_dock_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {dry_dock_labor} labor to the "
+                    f"dry dock ({player.dry_dock_labor}/"
+                    f"{Rules.DRY_DOCK_LABOR_REQUIRED})."
+                )
+                if player.dry_dock_completed:
+                    print(
+                        f"{player.name}'s dry dock is complete. "
+                        "Damaged raiders repair for free."
+                    )
+
             if not shipyard_labor and player.shipyard_started and not player.shipyard_completed:
                 print(f"{player.name} has no idle ships to work on the shipyard.")
 
@@ -1192,6 +1380,13 @@ class Game:
                 and not player.fishing_dock_built
             ):
                 print(f"{player.name} has no idle ships to work on the fishing docks.")
+
+            if (
+                not dry_dock_labor
+                and player.dry_dock_started
+                and not player.dry_dock_completed
+            ):
+                print(f"{player.name} has no idle ships to work on the dry dock.")
 
         if not any_labor:
             print("No port labor is applied this turn.")
@@ -1323,12 +1518,24 @@ class Game:
             ),
             (
                 "9",
+                "Repair damaged ships",
+                self.repair_damaged_ships_action,
+                self.repair_damaged_ships_disabled_reason(player),
+            ),
+            (
+                "10",
+                "Start dry dock",
+                self.start_dry_dock_action,
+                self.dry_dock_disabled_reason(player),
+            ),
+            (
+                "11",
                 "Launch treasure convoy",
                 self.launch_treasure_action,
                 self.treasure_launch_disabled_reason(player),
             ),
             (
-                "10",
+                "12",
                 "Launch payroll convoy",
                 self.launch_payroll_action,
                 self.payroll_launch_disabled_reason(player),
@@ -1399,6 +1606,24 @@ class Game:
             return f"too expensive ({Rules.FISHING_BOAT_COST} gold needed)"
         return None
 
+    def repair_damaged_ships_disabled_reason(self, player):
+        if player.damaged_ships <= 0:
+            return "no damaged ships"
+        if player.raid_repair_cost > 0 and player.gold < player.raid_repair_cost:
+            return f"too expensive ({player.raid_repair_cost} gold needed)"
+        return None
+
+    def dry_dock_disabled_reason(self, player):
+        if player.dry_dock_completed:
+            return "already completed"
+        if player.dry_dock_started:
+            return "already started"
+        if not player.shipyard_completed:
+            return "requires completed shipyard"
+        if player.gold < Rules.DRY_DOCK_COST:
+            return f"too expensive ({Rules.DRY_DOCK_COST} gold needed)"
+        return None
+
     def treasure_launch_disabled_reason(self, player):
         if player.has_treasure_at_sea:
             return "convoy already at sea"
@@ -1461,6 +1686,13 @@ class Game:
             f"on future turns."
         ))
 
+    def start_dry_dock_action(self, player):
+        player.start_dry_dock()
+        print(UI.success(
+            f"{player.name} starts a dry dock. Idle ships will add labor "
+            f"on future turns."
+        ))
+
     def buy_fire_ship_plans_action(self, player):
         player.unlock_fire_ships()
         print(UI.success(f"{player.name} can assign fire ships starting next turn."))
@@ -1514,6 +1746,33 @@ class Game:
 
     def buy_fishing_boats(self, player, amount):
         player.buy_fishing_boats(amount)
+
+    def repair_damaged_ships_action(self, player):
+        cost = player.raid_repair_cost
+        if cost == 0:
+            affordable = player.damaged_ships
+        else:
+            affordable = min(player.damaged_ships, player.gold // cost)
+
+        while True:
+            amount = self.prompt_non_negative_int(
+                f"{player.name}, repair damaged ships for {cost} gold each "
+                f"(damaged: {player.damaged_ships}, affordable: {affordable}): "
+            )
+
+            if amount <= affordable:
+                repaired = player.repair_damaged_ships(amount)
+                if repaired:
+                    print(UI.success(
+                        f"{player.name} repairs {repaired} damaged ship(s)."
+                    ))
+                else:
+                    print(f"{player.name} repairs no ships.")
+                return
+
+            print(UI.warning(
+                f"{player.name} can only repair {affordable} damaged ship(s)."
+            ))
 
     def launch_treasure_action(self, player):
         player.launch_treasure()
@@ -1680,6 +1939,34 @@ if __name__ == "__main__":
         help="optional SVG file plotting training win rate by generation",
     )
     parser.add_argument(
+        "--show-training-weights",
+        action="store_true",
+        help="print live strategy weights during --train-evolving",
+    )
+    parser.add_argument(
+        "--training-weights-interval",
+        type=int,
+        default=1,
+        help="generation interval for --show-training-weights; learned generations always print",
+    )
+    parser.add_argument(
+        "--training-dashboard",
+        action="store_true",
+        help="redraw a live top-style dashboard during --train-evolving",
+    )
+    parser.add_argument(
+        "--training-dashboard-history",
+        type=int,
+        default=12,
+        help="number of recent generation lines shown in --training-dashboard",
+    )
+    parser.add_argument(
+        "--training-dashboard-benchmark-games",
+        type=int,
+        default=100,
+        help="games per opponent for dashboard benchmarks after --train-evolving",
+    )
+    parser.add_argument(
         "--evaluate-strategy",
         help="benchmark an evolved strategy JSON file against the bot roster",
     )
@@ -1738,6 +2025,11 @@ if __name__ == "__main__":
             output_path=args.evolved_output,
             history_path=args.training_history,
             graph_path=args.training_graph,
+            show_weights=args.show_training_weights,
+            weights_interval=args.training_weights_interval,
+            dashboard=args.training_dashboard,
+            dashboard_history=args.training_dashboard_history,
+            dashboard_benchmark_games=args.training_dashboard_benchmark_games,
         )
     elif args.ai_log_summary:
         from bot_playtest import summarize_ai_games

@@ -181,19 +181,34 @@
 
 - Added `Harbor Harvest`, the v19 fishing-raider economy bot, to the default bot roster.
 - Added `Reef Tyrant`, the v22 fishing-pressure hybrid, to the default bot roster.
+- Added `Tide Reader`, an intra-game adaptive bot that adjusts its order weights after observing early opponent orders.
+- Added `Signal Black`, the v29 apex raid-pressure bot, to the default bot roster.
 - The default roster now includes an evolved bot that pairs heavy raid pressure with fishing dock snowballing.
 - Added `--max-turns` as an experimental game-length override; omit it to keep the normal 12-turn game.
 - Use `--max-turns 24` with self-play, training, or strategy benchmarks to test longer economic games.
 - Fishing dock construction and repair now require 1 labor; boats remain gold-only once docks are active.
+- Trade guilds now grant bonus trade income for every 2 completed trade ships.
+- Updated `Human Shadow` from the latest recorded human-vs-AI games and current economy constants.
+- Evolving strategy fitness now caps dominance against any single matchup, penalizes low worst-matchup win rates and port losses, rewards worst-matchup recovery and modest survival infrastructure, and only rejects candidates with major worst-matchup regressions.
+- Build priority now gives listed projects at least a 20% effective buy bias, making evolved priority order matter even when raw project bias mutates low.
+
+## Version 0.34
+
+- Added raid fatigue: every 10th lifetime raid ship action damages 1 ship for that nation.
+- Damaged ships still count as ships and can keep raiding, but surviving enemy guards sink damaged active raiders after normal resolution.
+- Damaged ships can be repaired during the buy phase for 4 gold each, or 1 gold each with a completed shipyard.
+- Added dry docks as a shipyard-gated project costing 3 gold and 2 labor; completed dry docks make raid repairs free.
+- Bot training now evolves repair and dry dock biases.
+- Added `Reef Bloom`, the v31 fishing-fortress economy bot, to the default bot roster.
 
 ## Bot Meta Notes
 
 ### Human Shadow
 
 - `Human Shadow` is a mirror of the current human game log, not an optimized benchmark bot.
-- The current profile is based on all 9 recorded human-vs-AI games in `ai_game_log.jsonl`.
-- Its order mix favors heavy trade, selective raids, meaningful guards, and almost no fire ships.
-- Its buy pattern favors frequent shipyard and trade guild play, with occasional forts and rare captains or fire plans.
+- The current profile is based on all 16 recorded human-vs-AI games in `ai_game_log.jsonl`, with extra weight on the current fishing-dock and trade-guild rules.
+- Its order mix favors very heavy trade, selective raids, meaningful guards, and almost no fire ships.
+- Its buy pattern favors shipyard, trade guild, fishing docks, fishing boats, and more frequent guard captains than older versions.
 - Its first three turns are selected from an opening book mined from human-won games, then it falls back to weighted play.
 - After the opening, weighted bots adjust to balance of power: fleet gap, asset gap, income engine, port-kill threats, and fleet pressure.
 
@@ -204,6 +219,20 @@
 - The strategy avoids early treasure launches because evolved play sees at-sea treasure as too vulnerable against raid-heavy bots.
 - It also underbuilds shipyards because immediate port pressure outperforms compounding economy against the current opponent roster.
 - The human counterexample in the log shows the pressure point: launch treasure early, guard through the first raids, start shipyard, let Red Tide run out of ships, then convert the economic lead into a port kill.
+
+### Signal Black
+
+- `Signal Black` is the v29 evolved apex pressure profile.
+- It is nearly pure raid with heavy ship buying, almost no convoy play, and no real build plan.
+- Its benchmark strength comes from forcing port races so efficiently that even older predator bots struggle to punish it.
+- Treat it as a balance alarm and a training target, not as evidence that the game is solved.
+
+### Tide Reader
+
+- `Tide Reader` is an experimental intra-game learning bot.
+- It records the opponent's orders from turns 1-3 and adjusts its later trade, raid, guard, and fire weights inside that game.
+- It does not permanently rewrite its strategy, so each new game starts from the same baseline.
+- Its baseline is intentionally balanced so the adaptation signal, not a hard-coded opening exploit, is the interesting part of the profile.
 
 ### Harbor Harvest
 
@@ -218,3 +247,10 @@
 - It combines overwhelming raid pressure with frequent fishing docks, enough boats to snowball, and occasional fort/captain support.
 - Its benchmark strength comes from winning by both port pressure and asset growth, rather than collapsing into a pure port-rush or pure fishing economy.
 - `The Red Tide` remains its main predator in the current roster, which keeps the profile from looking solved.
+
+### Reef Bloom
+
+- `Reef Bloom` is the v31 evolved fishing-fortress profile.
+- It builds around fishing docks and boats, uses fire ships for control, and repairs raid fatigue rather than committing to pure raid pressure.
+- Its benchmark strength comes from surviving to final scoring with a large domestic economy, not from frequent port kills.
+- Its main predators are the sharp pressure bots, especially `Signal Black` and `The Red Tide`.
