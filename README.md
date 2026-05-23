@@ -69,7 +69,8 @@
 - Run `python3 main.py --self-play 100` to let bot strategies play 100 games.
 - Add `--seed 1` for repeatable results while tuning strategies or rules.
 - The report ranks bot archetypes by win rate, average turns, average assets, and port wins.
-- Bot strategy and tournament code lives in `bot_playtest.py`.
+- Bot strategy and tournament code is split into smaller `bot_*.py` modules;
+  `bot_playtest.py` remains as a compatibility import surface.
 
 ## Version 0.16
 
