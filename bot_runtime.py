@@ -11,7 +11,7 @@ from game_state import Allocation, Rules
 from bot_roster import default_bot_strategies, find_strategy
 
 
-AI_GAME_LOG_PATH = Path("ai_game_log.jsonl")
+AI_GAME_LOG_PATH = Path("artifacts/logs/ai_game_log.jsonl")
 
 
 class SelfPlayGame(Game):

@@ -12,10 +12,14 @@ from bot_strategy import (
     strategy_record,
 )
 from bot_roster import (
-    HUMAN_WON_OPENING_BOOK,
     default_bot_strategies,
     find_strategy,
     strategy_names,
+)
+from bot_openings import (
+    HUMAN_WON_OPENING_BOOK,
+    NASH_ADMIRAL_OPENING_BOOK,
+    NASH_CORE_OPENING_BOOK,
 )
 from bot_runtime import (
     AI_GAME_LOG_PATH,

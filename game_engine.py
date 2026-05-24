@@ -21,6 +21,7 @@ class Game:
         self.port_destroyed = None
         self.damaged_raider_cleanup = {}
         self.buy_phase_baselines = {}
+        self.admiral_interventions = {}
 
     def play(self):
         UI.section(f"SEALED ORDERS v{Rules.VERSION}", "magenta")
@@ -354,6 +355,8 @@ class Game:
             "fishing_status": player.fishing_status,
             "raid_fatigue_status": player.raid_fatigue_status,
             "dry_dock_status": player.dry_dock_status,
+            "admiralty_status": player.admiralty_status,
+            "admiral_status": player.admiral_status,
             "fire_ship_status": player.fire_ship_status,
             "guard_captain_status": player.guard_captain_status,
             "allocation": Allocation(
@@ -395,6 +398,8 @@ class Game:
                 lines, "Raid fatigue", before, after, "raid_fatigue_status"
             )
             self.add_status_change(lines, "Dry dock", before, after, "dry_dock_status")
+            self.add_status_change(lines, "Admiralty", before, after, "admiralty_status")
+            self.add_status_change(lines, "Admirals", before, after, "admiral_status")
             self.add_status_change(
                 lines, "Fire ships", before, after, "fire_ship_status"
             )
@@ -452,7 +457,9 @@ class Game:
                 f"  {UI.field('Assets')} {UI.amount(player.asset_score, color='yellow')}{UI.delta(self.buy_delta(player, 'asset_score'))} "
                 f"(shipyard value: {player.shipyard_value}, "
                 f"fort value: {player.fort_value}, "
-                f"trade guild value: {player.trade_guild_value})",
+                f"trade guild value: {player.trade_guild_value}, "
+                f"dry dock value: {player.dry_dock_value}, "
+                f"admiralty value: {player.admiralty_value})",
                 f"  {UI.field('Economy')} Trade income: {UI.amount(Rules.TRADE_INCOME, 'gold')}, "
                 f"smuggle income: {UI.amount(Rules.SMUGGLE_INCOME, 'gold')}, "
                 f"fishing boat income: {UI.amount(Rules.FISHING_BOAT_INCOME, 'gold')}",
@@ -473,6 +480,8 @@ class Game:
                 f"  {UI.field('Raid fatigue')} {player.raid_fatigue_status}",
                 f"  {UI.field('Port defences')} {player.port_defense_status}",
                 f"  {UI.field('Dry dock')} {player.dry_dock_status}",
+                f"  {UI.field('Admiralty')} {player.admiralty_status}",
+                f"  {UI.field('Admirals')} {player.admiral_status}",
                 f"  {UI.field('Captains')} {player.guard_captain_status}",
             ]
         )
@@ -518,6 +527,13 @@ class Game:
             False,
             "cyan",
         )
+        admiralty = style(
+            "Adm /\\^/\\",
+            player.admiralty_completed,
+            player.admiralty_started,
+            False,
+            "white",
+        )
         fire = style("Fire >>>", player.fire_ships_unlocked, False, False, "red")
         captain_marks = " ".join(
             UI.paint("/|\\", "magenta", bold=True)
@@ -525,13 +541,21 @@ class Game:
             else UI.muted("/|\\")
             for index in range(Rules.GUARD_CAPTAIN_MAX)
         )
+        admiral_marks = " ".join(
+            UI.paint("<^>", "white", bold=True)
+            if index < player.admirals
+            else UI.muted("<^>")
+            for index in range(Rules.ADMIRAL_MAX)
+        )
 
         return [
             "",
             UI.field("Harbor works"),
             f"  {yard}    {fort}    {guild}",
-            f"  {fishing}    {dry_dock}    {fire}",
+            f"  {fishing}    {dry_dock}    {admiralty}",
+            f"  {fire}",
             f"  Capt {captain_marks}",
+            f"  Adm  {admiral_marks}",
             f"  {self.convoy_art_line(player)}",
         ]
 
@@ -578,6 +602,8 @@ class Game:
             ("guild", "trade_guild_status"),
             ("fishing", "fishing_status"),
             ("dry dock", "dry_dock_status"),
+            ("admiralty", "admiralty_status"),
+            ("admirals", "admiral_status"),
             ("fire", "fire_ship_status"),
             ("captains", "guard_captain_status"),
         ]:
@@ -628,6 +654,12 @@ class Game:
                 player.dry_dock_started and not player.dry_dock_completed,
                 player.dry_dock_labor,
                 Rules.DRY_DOCK_LABOR_REQUIRED,
+            ),
+            (
+                "admiralty",
+                player.admiralty_started and not player.admiralty_completed,
+                player.admiralty_labor,
+                Rules.ADMIRALTY_LABOR_REQUIRED,
             ),
         ]
 
@@ -907,6 +939,7 @@ class Game:
         UI.section("RESOLUTION", "red")
         player_one, player_two = self.players
         self.damaged_raider_cleanup = {}
+        self.admiral_interventions = {player: player.admirals for player in self.players}
         for player in self.players:
             player.reset_fort_fire_blocks()
 
@@ -931,6 +964,7 @@ class Game:
 
         result_one = self.resolve_income(trader=player_one, opponent=player_two)
         result_two = self.resolve_income(trader=player_two, opponent=player_one)
+        self.resolve_raider_skirmish(player_one, player_two)
         self.resolve_damaged_raider_cleanup(raider=player_one, guarder=player_two)
         self.resolve_damaged_raider_cleanup(raider=player_two, guarder=player_one)
 
@@ -1062,8 +1096,8 @@ class Game:
             return
         if guard_strength == 0:
             print(
-                f"\n{raider.name}'s {raid_strength} raid ship(s) find no "
-                f"{guarder.name} guard screen."
+                f"\n{raider.name}'s {raid_strength} raid ship(s) find "
+                f"{guarder.name}'s sea lanes unguarded."
             )
             return
 
@@ -1078,22 +1112,43 @@ class Game:
                 weaker=guard_strength,
                 engaged_ships=engaged_ships,
             )
+            guarder_losses = self.apply_admiral_overwhelming_bonus(
+                commander=raider,
+                target=guarder,
+                losses=guarder_losses,
+                engaged_ships=engaged_ships,
+            )
         elif guard_strength > raid_strength:
             raider_losses = self.calculate_overwhelming_losses(
                 stronger=guard_strength,
                 weaker=raid_strength,
                 engaged_ships=engaged_ships,
             )
+            raider_losses = self.apply_admiral_overwhelming_bonus(
+                commander=guarder,
+                target=raider,
+                losses=raider_losses,
+                engaged_ships=engaged_ships,
+            )
         elif raid_strength >= 2:
             raider_losses = 1
             guarder_losses = 1
 
+        raider_result = self.apply_admiral_battle_losses(
+            player=raider,
+            role="raid",
+            requested_losses=raider_losses,
+        )
+        guarder_result = self.apply_admiral_battle_losses(
+            player=guarder,
+            role="guard",
+            requested_losses=guarder_losses,
+        )
+        raider_losses = raider_result["sunk"]
+        guarder_losses = guarder_result["sunk"]
+
         raider.allocation.raid -= engaged_ships
         guarder.allocation.guard -= engaged_ships
-        raider.ships -= raider_losses
-        guarder.ships -= guarder_losses
-        raider.cap_damaged_ships()
-        guarder.cap_damaged_ships()
         self.record_damaged_raider_battle_losses(
             raider,
             guarder,
@@ -1101,14 +1156,177 @@ class Game:
             guarder_losses,
         )
 
-        if raider_losses == 0 and guarder_losses == 0:
+        if (
+            raider_losses == 0
+            and guarder_losses == 0
+            and not raider_result["saved"]
+            and not guarder_result["saved"]
+        ):
             print(" - Even light forces disengage. No ships sink or reach trade.")
             return
 
         if raider_losses:
             print(f" - {raider.name} loses {raider_losses} raid ship(s).")
+        if raider_result["saved"]:
+            print(
+                f" - {raider.name}'s admiral saves 1 ship; "
+                "it becomes damaged instead of sinking."
+            )
         if guarder_losses:
             print(f" - {guarder.name} loses {guarder_losses} guard ship(s).")
+        if guarder_result["saved"]:
+            print(
+                f" - {guarder.name}'s admiral saves 1 ship; "
+                "it becomes damaged instead of sinking."
+            )
+
+    def resolve_raider_skirmish(self, player_one, player_two):
+        raid_one = player_one.allocation.raid
+        raid_two = player_two.allocation.raid
+        engaged_ships = min(raid_one, raid_two)
+
+        if engaged_ships <= 0:
+            return
+
+        print(
+            f"\n{player_one.name}'s raiders cross wakes with "
+            f"{player_two.name}'s raiders:"
+        )
+
+        hits_one = 0
+        hits_two = 0
+        if raid_one > raid_two:
+            hits_two = self.calculate_overwhelming_losses(
+                stronger=raid_one,
+                weaker=raid_two,
+                engaged_ships=engaged_ships,
+            )
+            hits_two = self.apply_admiral_overwhelming_bonus(
+                commander=player_one,
+                target=player_two,
+                losses=hits_two,
+                engaged_ships=engaged_ships,
+                effect_label="skirmish hits",
+            )
+        elif raid_two > raid_one:
+            hits_one = self.calculate_overwhelming_losses(
+                stronger=raid_two,
+                weaker=raid_one,
+                engaged_ships=engaged_ships,
+            )
+            hits_one = self.apply_admiral_overwhelming_bonus(
+                commander=player_two,
+                target=player_one,
+                losses=hits_one,
+                engaged_ships=engaged_ships,
+                effect_label="skirmish hits",
+            )
+        elif raid_one >= 2:
+            hits_one = 1
+            hits_two = 1
+        else:
+            print(" - Lone raiders shadow each other and break off.")
+            return
+
+        result_one = self.apply_raider_skirmish_hits(player_one, player_two, hits_one)
+        result_two = self.apply_raider_skirmish_hits(player_two, player_one, hits_two)
+
+        player_one.allocation.raid -= engaged_ships
+        player_two.allocation.raid -= engaged_ships
+
+        if not any(
+            [
+                result_one["damaged"],
+                result_one["sunk"],
+                result_two["damaged"],
+                result_two["sunk"],
+            ]
+        ):
+            print(" - The raiders maneuver for position, then scatter.")
+            return
+
+        self.print_raider_skirmish_result(player_one, result_one)
+        self.print_raider_skirmish_result(player_two, result_two)
+
+    def apply_raider_skirmish_hits(self, player, opponent, hits):
+        active_raiders = player.allocation.raid
+        engaged_raiders = min(active_raiders, opponent.allocation.raid)
+        damaged_engaged = min(player.damaged_ships, engaged_raiders)
+        sunk = min(damaged_engaged, hits)
+        damaged = min(hits - sunk, engaged_raiders - damaged_engaged)
+
+        player.ships -= sunk
+        player.damaged_ships -= sunk
+        player.damaged_ships += damaged
+        player.raid_skirmish_damage += damaged
+        player.raid_skirmish_sunk += sunk
+        player.damaged_raiders_sunk += sunk
+        player.cap_damaged_ships()
+
+        cleanup = self.damaged_raider_cleanup.get((player, opponent))
+        if cleanup is not None:
+            cleanup["damaged_raiders"] = max(
+                0,
+                cleanup["damaged_raiders"] - damaged_engaged,
+            )
+
+        return {
+            "hits": hits,
+            "damaged": damaged,
+            "sunk": sunk,
+            "damaged_engaged": damaged_engaged,
+        }
+
+    def print_raider_skirmish_result(self, player, result):
+        if result["sunk"]:
+            print(
+                f" - {player.name}'s already-damaged raider(s) cannot take "
+                f"the strain: {result['sunk']} ship(s) sink."
+            )
+        if result["damaged"]:
+            print(
+                f" - {player.name} takes {result['damaged']} skirmish hit(s); "
+                f"{result['damaged']} raid ship(s) become damaged."
+            )
+
+    def apply_admiral_overwhelming_bonus(
+        self,
+        commander,
+        target,
+        losses,
+        engaged_ships,
+        effect_label="losses",
+    ):
+        if losses != 2 or self.admiral_interventions.get(commander, 0) <= 0:
+            return losses
+        boosted_losses = min(3, engaged_ships)
+        if boosted_losses <= losses:
+            return losses
+        self.admiral_interventions[commander] -= 1
+        print(
+            f" - {commander.name}'s admiral presses the advantage: "
+            f"{target.name} faces {boosted_losses} {effect_label} "
+            f"instead of {losses}."
+        )
+        return boosted_losses
+
+    def apply_admiral_battle_losses(self, player, role, requested_losses):
+        active_ships = getattr(player.allocation, role)
+        damaged_active = min(player.damaged_ships, active_ships)
+        damaged_sunk = min(damaged_active, requested_losses)
+        undamaged_losses = max(0, requested_losses - damaged_sunk)
+        saved = 0
+        if undamaged_losses > 0 and self.admiral_interventions.get(player, 0) > 0:
+            saved = 1
+            undamaged_losses -= 1
+            self.admiral_interventions[player] -= 1
+
+        sunk = damaged_sunk + undamaged_losses
+        player.ships -= sunk
+        player.damaged_ships -= damaged_sunk
+        player.damaged_ships += saved
+        player.cap_damaged_ships()
+        return {"sunk": sunk, "saved": saved, "damaged_sunk": damaged_sunk}
 
     def apply_raid_fatigue(self, player):
         damage_added = player.record_raid_actions(player.allocation.raid)
@@ -1176,7 +1394,8 @@ class Game:
         if defender.ships > 0:
             return False
 
-        required_raids = defender.port_attack_threshold
+        conscripts = self.admiralty_conscript_defense(defender)
+        required_raids = defender.port_attack_threshold + conscripts
 
         if attacker.allocation.raid < required_raids:
             return False
@@ -1184,13 +1403,21 @@ class Game:
         self.game_over = True
         self.port_destroyer = attacker
         self.port_destroyed = defender
+        defense_parts = [defender.port_defense_status]
+        if conscripts:
+            defense_parts.append(f"+{conscripts} Admiralty conscripts")
         print(
             f"\n{attacker.name} sends {attacker.allocation.raid} raid ship(s) "
             f"against {defender.name}'s undefended home port "
-            f"({required_raids} required)."
+            f"({required_raids} required: {'; '.join(defense_parts)})."
         )
         print(f"{defender.name}'s home port is destroyed.")
         return True
+
+    def admiralty_conscript_defense(self, defender):
+        if not defender.admiralty_completed:
+            return 0
+        return max(0, self.port_labor.get(defender, 0))
 
     def resolve_income(self, trader, opponent):
         remaining_trade = trader.allocation.trade
@@ -1232,9 +1459,11 @@ class Game:
             )
 
         raid_intercepts = min(active_raids, remaining_trade)
+        active_raids -= raid_intercepts
         remaining_trade -= raid_intercepts
         stolen_trade_income = raid_intercepts * Rules.TRADE_INCOME
         stolen_income += stolen_trade_income
+        opponent.allocation.raid = active_raids
 
         smuggled_trade = min(opponent.allocation.guard, remaining_trade)
         remaining_trade -= smuggled_trade
@@ -1355,6 +1584,8 @@ class Game:
             fishing_dock_labor = player.add_fishing_dock_labor(port_labor)
             port_labor -= fishing_dock_labor
             dry_dock_labor = player.add_dry_dock_labor(port_labor)
+            port_labor -= dry_dock_labor
+            admiralty_labor = player.add_admiralty_labor(port_labor)
 
             if shipyard_labor:
                 any_labor = True
@@ -1413,6 +1644,19 @@ class Game:
                         "Damaged raiders repair for free."
                     )
 
+            if admiralty_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {admiralty_labor} labor to the "
+                    f"admiralty ({player.admiralty_labor}/"
+                    f"{Rules.ADMIRALTY_LABOR_REQUIRED})."
+                )
+                if player.admiralty_completed:
+                    print(
+                        f"{player.name}'s admiralty is complete. "
+                        "Admirals and overtime are now available."
+                    )
+
             if not shipyard_labor and player.shipyard_started and not player.shipyard_completed:
                 print(f"{player.name} has no port workers to work on the shipyard.")
 
@@ -1439,6 +1683,13 @@ class Game:
                 and not player.dry_dock_completed
             ):
                 print(f"{player.name} has no port workers to work on the dry dock.")
+
+            if (
+                not admiralty_labor
+                and player.admiralty_started
+                and not player.admiralty_completed
+            ):
+                print(f"{player.name} has no port workers to work on the admiralty.")
 
         if not any_labor:
             print("No port labor is applied this turn.")
@@ -1671,12 +1922,30 @@ class Game:
             ),
             (
                 "11",
+                "Start admiralty",
+                self.start_admiralty_action,
+                self.admiralty_disabled_reason(player),
+            ),
+            (
+                "12",
+                "Recruit admiral",
+                self.recruit_admiral_action,
+                self.admiral_disabled_reason(player),
+            ),
+            (
+                "13",
+                "Admiralty overtime",
+                self.admiralty_overtime_action,
+                self.admiralty_overtime_disabled_reason(player),
+            ),
+            (
+                "14",
                 "Launch treasure convoy",
                 self.launch_treasure_action,
                 self.treasure_launch_disabled_reason(player),
             ),
             (
-                "12",
+                "15",
                 "Launch payroll convoy",
                 self.launch_payroll_action,
                 self.payroll_launch_disabled_reason(player),
@@ -1685,7 +1954,7 @@ class Game:
 
     def buy_ships_disabled_reason(self, player):
         if player.gold < player.ship_cost:
-            return f"too expensive ({player.ship_cost} gold needed)"
+            return f"needs {player.ship_cost} gold"
         return None
 
     def shipyard_disabled_reason(self, player):
@@ -1694,7 +1963,7 @@ class Game:
         if player.shipyard_started:
             return "already started"
         if player.gold < Rules.SHIPYARD_COST:
-            return f"too expensive ({Rules.SHIPYARD_COST} gold needed)"
+            return f"needs {Rules.SHIPYARD_COST} gold"
         return None
 
     def fort_disabled_reason(self, player):
@@ -1703,7 +1972,7 @@ class Game:
         if player.fort_started:
             return "already started"
         if player.gold < Rules.FORT_COST:
-            return f"too expensive ({Rules.FORT_COST} gold needed)"
+            return f"needs {Rules.FORT_COST} gold"
         return None
 
     def trade_guild_disabled_reason(self, player):
@@ -1712,21 +1981,21 @@ class Game:
         if player.trade_guild_started:
             return "already started"
         if player.gold < Rules.TRADE_GUILD_COST:
-            return f"too expensive ({Rules.TRADE_GUILD_COST} gold needed)"
+            return f"needs {Rules.TRADE_GUILD_COST} gold"
         return None
 
     def fire_ship_plans_disabled_reason(self, player):
         if player.fire_ships_unlocked:
             return "already unlocked"
         if player.gold < Rules.FIRE_SHIP_UPGRADE_COST:
-            return f"too expensive ({Rules.FIRE_SHIP_UPGRADE_COST} gold needed)"
+            return f"needs {Rules.FIRE_SHIP_UPGRADE_COST} gold"
         return None
 
     def guard_captain_disabled_reason(self, player):
         if player.guard_captains >= Rules.GUARD_CAPTAIN_MAX:
             return "maximum hired"
         if player.gold < Rules.GUARD_CAPTAIN_COST:
-            return f"too expensive ({Rules.GUARD_CAPTAIN_COST} gold needed)"
+            return f"needs {Rules.GUARD_CAPTAIN_COST} gold"
         return None
 
     def fishing_dock_disabled_reason(self, player):
@@ -1735,7 +2004,7 @@ class Game:
         if player.fishing_dock_started and not player.fishing_dock_built:
             return "already under construction"
         if player.gold < Rules.FISHING_DOCK_COST:
-            return f"too expensive ({Rules.FISHING_DOCK_COST} gold needed)"
+            return f"needs {Rules.FISHING_DOCK_COST} gold"
         return None
 
     def buy_fishing_boats_disabled_reason(self, player):
@@ -1744,14 +2013,14 @@ class Game:
         if player.fishing_dock_disabled:
             return "repair fishing docks first"
         if player.gold < Rules.FISHING_BOAT_COST:
-            return f"too expensive ({Rules.FISHING_BOAT_COST} gold needed)"
+            return f"needs {Rules.FISHING_BOAT_COST} gold"
         return None
 
     def repair_damaged_ships_disabled_reason(self, player):
         if player.damaged_ships <= 0:
             return "no damaged ships"
         if player.raid_repair_cost > 0 and player.gold < player.raid_repair_cost:
-            return f"too expensive ({player.raid_repair_cost} gold needed)"
+            return f"needs {player.raid_repair_cost} gold"
         return None
 
     def dry_dock_disabled_reason(self, player):
@@ -1760,9 +2029,43 @@ class Game:
         if player.dry_dock_started:
             return "already started"
         if not player.shipyard_completed:
-            return "requires completed shipyard"
+            return "needs completed shipyard"
         if player.gold < Rules.DRY_DOCK_COST:
-            return f"too expensive ({Rules.DRY_DOCK_COST} gold needed)"
+            return f"needs {Rules.DRY_DOCK_COST} gold"
+        return None
+
+    def admiralty_disabled_reason(self, player):
+        if player.admiralty_completed:
+            return "already completed"
+        if player.admiralty_started:
+            return "already started"
+        if player.gold < Rules.ADMIRALTY_COST:
+            return f"needs {Rules.ADMIRALTY_COST} gold"
+        return None
+
+    def admiral_disabled_reason(self, player):
+        if not player.admiralty_completed:
+            return "needs completed admiralty"
+        if player.admirals >= Rules.ADMIRAL_MAX:
+            return "maximum recruited"
+        if player.admirals >= player.admiral_slots:
+            required_ships = (player.admirals + 1) * Rules.ADMIRAL_SHIPS_PER_SLOT
+            return f"requires {required_ships} ships for next slot"
+        if player.gold < Rules.ADMIRAL_COST:
+            return f"needs {Rules.ADMIRAL_COST} gold"
+        return None
+
+    def admiralty_overtime_disabled_reason(self, player):
+        if not player.admiralty_completed:
+            return "needs completed admiralty"
+        if player.admiralty_overtime_used:
+            return "already used"
+        targets = self.admiralty_overtime_targets(player)
+        if not targets:
+            return "no eligible project"
+        if all(player.gold < target["cost"] for target in targets):
+            cheapest = min(target["cost"] for target in targets)
+            return f"needs {cheapest} gold"
         return None
 
     def treasure_launch_disabled_reason(self, player):
@@ -1843,6 +2146,213 @@ class Game:
             f"{player.name} starts a dry dock. Port workers will add labor "
             f"on future turns."
         ))
+
+    def start_admiralty_action(self, player):
+        player.start_admiralty()
+        print(UI.success(
+            f"{player.name} starts an admiralty. Port workers will add labor "
+            f"on future turns."
+        ))
+
+    def recruit_admiral_action(self, player):
+        player.recruit_admiral()
+        print(UI.success(
+            f"{player.name} recruits an admiral "
+            f"({player.admirals}/{Rules.ADMIRAL_MAX})."
+        ))
+
+    def admiralty_overtime_action(self, player):
+        targets = [
+            target
+            for target in self.admiralty_overtime_targets(player)
+            if player.gold >= target["cost"]
+        ]
+        if not targets:
+            print(UI.warning("No affordable overtime project is available."))
+            return
+
+        target = self.prompt_admiralty_overtime_target(player, targets)
+        if target is None:
+            return
+        self.apply_admiralty_overtime(player, target["key"])
+
+    def admiralty_overtime_targets(self, player):
+        targets = []
+
+        def add(key, label, base_cost, eligible):
+            if eligible:
+                targets.append(
+                    {
+                        "key": key,
+                        "label": label,
+                        "base_cost": base_cost,
+                        "cost": base_cost * 2,
+                    }
+                )
+
+        add(
+            "shipyard",
+            "Shipyard",
+            Rules.SHIPYARD_COST,
+            not player.shipyard_completed,
+        )
+        add("fort", "Fort", Rules.FORT_COST, not player.fort_completed)
+        add(
+            "trade_guild",
+            "Trade guild",
+            Rules.TRADE_GUILD_COST,
+            not player.trade_guild_completed,
+        )
+        add(
+            "fishing_dock",
+            "Fishing docks",
+            Rules.FISHING_DOCK_COST,
+            not player.fishing_dock_built or player.fishing_dock_disabled,
+        )
+        add(
+            "dry_dock",
+            "Dry dock",
+            Rules.DRY_DOCK_COST,
+            player.shipyard_completed and not player.dry_dock_completed,
+        )
+        add(
+            "fire_plans",
+            "Fire ship plans",
+            Rules.FIRE_SHIP_UPGRADE_COST,
+            not player.fire_ships_unlocked,
+        )
+        return targets
+
+    def prompt_admiralty_overtime_target(self, player, targets):
+        if sys.stdin.isatty():
+            return self.with_cbreak(
+                lambda: self.prompt_admiralty_overtime_target_menu(player, targets)
+            )
+
+        print(f"{player.name}, choose an overtime project:")
+        for index, target in enumerate(targets, start=1):
+            print(f"{index}. {target['label']} ({target['cost']} gold)")
+        while True:
+            choice = self.prompt_non_negative_int("Overtime project (0 cancels): ")
+            if choice == 0:
+                print("Overtime cancelled.")
+                return None
+            if 1 <= choice <= len(targets):
+                return targets[choice - 1]
+            print(UI.warning("Choose one of the listed projects."))
+
+    def prompt_admiralty_overtime_target_menu(self, player, targets):
+        selected = 0
+        message = "Choose a project for one-time Admiralty overtime."
+        while True:
+            control_lines = [
+                f"{player.name}, choose an overtime project.",
+                "Pay double base gold cost; labor is completed instantly.",
+                "Up/down select, digits jump, Enter chooses.",
+                "",
+            ]
+            for index, target in enumerate(targets):
+                prefix = ">" if index == selected else " "
+                line = (
+                    f"{prefix} {index + 1}. {target['label']} "
+                    f"- {target['cost']} gold"
+                )
+                control_lines.append(UI.success(line) if index == selected else line)
+            control_lines.append("  0. Cancel")
+            if message:
+                control_lines.extend(["", message])
+
+            self.render_play_area(
+                phase=f"{player.name}'s Admiralty Overtime",
+                control_lines=control_lines,
+                info_lines=self.player_economy_lines(player),
+                info_title="Harbor Details",
+                clear=True,
+                include_state=True,
+            )
+            key = self.read_menu_key()
+            if key == "up":
+                selected = (selected - 1) % len(targets)
+            elif key == "down":
+                selected = (selected + 1) % len(targets)
+            elif key == "enter":
+                return targets[selected]
+            elif key == "0":
+                return None
+            elif key.isdigit():
+                choice = int(key)
+                if 1 <= choice <= len(targets):
+                    selected = choice - 1
+                    return targets[selected]
+                message = UI.warning("No such project.")
+            else:
+                message = "Use arrows, digits, or Enter."
+
+    def apply_best_admiralty_overtime(self, player):
+        affordable_targets = [
+            target
+            for target in self.admiralty_overtime_targets(player)
+            if player.gold >= target["cost"]
+        ]
+        if not affordable_targets:
+            return False
+        order = {
+            "shipyard": 0,
+            "dry_dock": 1,
+            "fort": 2,
+            "trade_guild": 3,
+            "fishing_dock": 4,
+            "fire_plans": 5,
+        }
+        target = min(affordable_targets, key=lambda item: order.get(item["key"], 99))
+        self.apply_admiralty_overtime(player, target["key"], announce=False)
+        return True
+
+    def apply_admiralty_overtime(self, player, target_key, announce=True):
+        target = next(
+            (
+                target
+                for target in self.admiralty_overtime_targets(player)
+                if target["key"] == target_key
+            ),
+            None,
+        )
+        if target is None or player.admiralty_overtime_used or player.gold < target["cost"]:
+            return False
+
+        player.gold -= target["cost"]
+        player.admiralty_overtime_used = True
+        if target_key == "shipyard":
+            player.shipyard_started = True
+            player.shipyard_completed = True
+            player.shipyard_labor = Rules.SHIPYARD_LABOR_REQUIRED
+            player.shipyard_destroyed = False
+        elif target_key == "fort":
+            player.fort_started = True
+            player.fort_completed = True
+            player.fort_labor = Rules.FORT_LABOR_REQUIRED
+        elif target_key == "trade_guild":
+            player.trade_guild_started = True
+            player.trade_guild_completed = True
+            player.trade_guild_labor = Rules.TRADE_GUILD_LABOR_REQUIRED
+        elif target_key == "fishing_dock":
+            player.fishing_dock_started = False
+            player.fishing_dock_labor = Rules.FISHING_DOCK_LABOR_REQUIRED
+            player.fishing_dock_built = True
+            player.fishing_dock_disabled = False
+        elif target_key == "dry_dock":
+            player.dry_dock_started = True
+            player.dry_dock_completed = True
+            player.dry_dock_labor = Rules.DRY_DOCK_LABOR_REQUIRED
+        elif target_key == "fire_plans":
+            player.fire_ships_unlocked = True
+
+        if announce:
+            print(UI.success(
+                f"{player.name}'s Admiralty overtime completes "
+                f"{target['label']} for {target['cost']} gold."
+            ))
+        return True
 
     def buy_fire_ship_plans_action(self, player):
         player.unlock_fire_ships()
@@ -1991,6 +2501,9 @@ class Game:
                             "Fishing: "
                             f"{UI.amount(player.fishing_dock_value + player.fishing_boat_value, 'value', 'yellow')}"
                         ),
+                        f"Dry dock: {UI.amount(player.dry_dock_value, 'value', 'yellow')}",
+                        f"Admiralty: {UI.amount(player.admiralty_value, 'value', 'yellow')}",
+                        f"Admirals: {UI.amount(player.admirals)}",
                         f"Guard captains: {UI.amount(player.guard_captains)}",
                         (
                             "Total assets: "

@@ -19,6 +19,9 @@ BOT_WEIGHT_FIELDS = [
     "fishing_dock_bias",
     "fishing_boat_bias",
     "dry_dock_bias",
+    "admiralty_bias",
+    "admiral_bias",
+    "overtime_bias",
     "repair_bias",
     "construction_idle_bias",
 ]
@@ -31,23 +34,34 @@ BUILD_PROJECTS = [
     "guard_captain",
     "fire_plans",
     "dry_dock",
+    "admiralty",
+    "admiral",
+    "overtime",
 ]
 MIN_FLEET_FOR_PROJECTS = 3
 MIN_FLEET_FOR_CONVOYS = 2
 REBUILD_FLEET_TARGET = 4
 MIDGAME_START_TURN = 4
-PRIORITY_PROJECT_MIN_BIAS = 0.20
-MATCHUP_FLOOR_WIN_RATE = 0.35
-DOMINANCE_CAP_PER_GAME = 180
+PRIORITY_PROJECT_MIN_BIAS = 0.10
+TREASURE_CONVOY_MIN_BIAS = 0.25
+TREASURE_CONVOY_MIN_FLEET = 3
+TREASURE_CONVOY_CORE_TURNS = 6
+MATCHUP_FLOOR_WIN_RATE = 0.25
+DOMINANCE_CAP_PER_GAME = 400
 MATCHUP_FLOOR_PENALTY = 350
-MATCHUP_FLOOR_RECOVERY_BONUS = 60000
-ROBUSTNESS_ALLOWED_REGRESSION = 0.05
-ROBUSTNESS_REGRESSION_PREMIUM = 12000
-ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.15
+MATCHUP_FLOOR_RECOVERY_BONUS = 30000
+ROBUSTNESS_ALLOWED_REGRESSION = 0.10
+ROBUSTNESS_REGRESSION_PREMIUM = 5000
+ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.20
 PORT_LOSS_PRESSURE_PENALTY = 80
 SURVIVAL_SHIPYARD_BONUS = 20
 SURVIVAL_FORT_BONUS = 20
+SURVIVAL_TRADE_GUILD_BONUS = 8
+SURVIVAL_DRY_DOCK_BONUS = 12
+SURVIVAL_ADMIRALTY_BONUS = 25
+SURVIVAL_ADMIRAL_BONUS = 10
 SURVIVAL_GUARD_CAPTAIN_BONUS = 8
+SUSTAIN_REPAIR_BONUS = 3
 
 
 class BotStrategy:
@@ -69,6 +83,9 @@ class BotStrategy:
         fishing_dock_bias=None,
         fishing_boat_bias=None,
         dry_dock_bias=None,
+        admiralty_bias=None,
+        admiral_bias=None,
+        overtime_bias=None,
         repair_bias=0.5,
         construction_idle_bias=0.0,
         opening_book=None,
@@ -104,6 +121,9 @@ class BotStrategy:
             fishing_boat_bias,
         )
         self.dry_dock_bias = self.default_project_bias("dry_dock", dry_dock_bias)
+        self.admiralty_bias = self.default_project_bias("admiralty", admiralty_bias)
+        self.admiral_bias = self.default_project_bias("admiral", admiral_bias)
+        self.overtime_bias = self.default_project_bias("overtime", overtime_bias)
         self.repair_bias = repair_bias
         self.construction_idle_bias = construction_idle_bias
         self.opening_book = opening_book or []
@@ -165,9 +185,13 @@ class BotStrategy:
         if opponent.has_payroll_at_sea:
             weights["raid"] += 2.0
         if player.has_treasure_at_sea:
-            weights["guard"] += 2.0
+            weights["guard"] += 3.5
+            weights["trade"] *= 0.65
+            weights["raid"] *= 0.65
         if player.has_payroll_at_sea:
-            weights["guard"] += 2.5
+            weights["guard"] += 4.0
+            weights["trade"] *= 0.55
+            weights["raid"] *= 0.55
         if opponent.ships <= Rules.PORT_ATTACK_SHIPS_REQUIRED:
             weights["raid"] += 1.5
         if opponent.shipyard_started:
@@ -178,6 +202,9 @@ class BotStrategy:
             weights["fire"] = 0
 
         allocation = {"trade": 0, "raid": 0, "guard": 0, "fire": 0}
+        escort_guards = self.convoy_escort_guards(player, opponent, ships)
+        allocation["guard"] = escort_guards
+        ships -= escort_guards
         for _ in range(ships):
             choice = self.weighted_choice(weights, rng)
             allocation[choice] += 1
@@ -258,6 +285,41 @@ class BotStrategy:
                     dry_dock_bias += 0.25
                 if rng.random() < min(1.0, dry_dock_bias):
                     player.start_dry_dock()
+            elif (
+                project == "admiralty"
+                and game.admiralty_disabled_reason(player) is None
+            ):
+                admiralty_bias = self.project_buy_bias("admiralty")
+                if player.ships >= Rules.ADMIRAL_SHIPS_PER_SLOT:
+                    admiralty_bias += 0.2
+                if self.raid_weight >= 3.0 or self.guard_weight >= 3.0:
+                    admiralty_bias += 0.2
+                if position["under_fleet_pressure"] or player.fort_completed:
+                    admiralty_bias += 0.1
+                if rng.random() < min(1.0, admiralty_bias):
+                    player.start_admiralty()
+            elif (
+                project == "admiral"
+                and game.admiral_disabled_reason(player) is None
+            ):
+                admiral_bias = self.project_buy_bias("admiral")
+                if self.raid_weight >= 3.0 or self.guard_weight >= 3.0:
+                    admiral_bias += 0.25
+                if player.ships >= (player.admirals + 2) * Rules.ADMIRAL_SHIPS_PER_SLOT:
+                    admiral_bias += 0.15
+                if rng.random() < min(1.0, admiral_bias):
+                    player.recruit_admiral()
+            elif (
+                project == "overtime"
+                and game.admiralty_overtime_disabled_reason(player) is None
+            ):
+                overtime_bias = self.project_buy_bias("overtime")
+                if position["under_fleet_pressure"]:
+                    overtime_bias += 0.15
+                if not player.shipyard_completed:
+                    overtime_bias += 0.15
+                if rng.random() < min(1.0, overtime_bias):
+                    game.apply_best_admiralty_overtime(player)
 
         if self.should_launch_payroll(game, player, rng):
             player.launch_payroll()
@@ -298,8 +360,21 @@ class BotStrategy:
                 if opening.get("anti_aggro")
             ]
             if shield_openings:
-                return rng.choice(shield_openings)
-        return rng.choice(self.opening_book)
+                return self.weighted_opening_choice(shield_openings, rng)
+        return self.weighted_opening_choice(self.opening_book, rng)
+
+    def weighted_opening_choice(self, openings, rng):
+        total_weight = sum(max(0, opening.get("weight", 1)) for opening in openings)
+        if total_weight <= 0:
+            return rng.choice(openings)
+
+        roll = rng.random() * total_weight
+        running = 0
+        for opening in openings:
+            running += max(0, opening.get("weight", 1))
+            if roll <= running:
+                return opening
+        return openings[-1]
 
     def is_ultra_aggro_opponent(self, opponent):
         return (
@@ -322,7 +397,7 @@ class BotStrategy:
 
         for action in opening_turn.get("buy_actions", []):
             self.run_opening_buy_action(action, game, player)
-        return True
+        return not opening_turn.get("continue_buy_phase", False)
 
     def run_opening_buy_action(self, action, game, player):
         if action == "launch_treasure":
@@ -354,12 +429,36 @@ class BotStrategy:
         elif action == "start_dry_dock":
             if game.dry_dock_disabled_reason(player) is None:
                 player.start_dry_dock()
+        elif action == "start_admiralty":
+            if game.admiralty_disabled_reason(player) is None:
+                player.start_admiralty()
+        elif action == "recruit_admiral":
+            if game.admiral_disabled_reason(player) is None:
+                player.recruit_admiral()
+        elif action == "admiralty_overtime":
+            if game.admiralty_overtime_disabled_reason(player) is None:
+                game.apply_best_admiralty_overtime(player)
         elif action == "repair_damaged_ships":
             self.repair_all_affordable_damaged_ships(player)
         elif action == "buy_ships":
             affordable = player.gold // player.ship_cost
             if affordable > 0:
                 player.buy_ships(affordable)
+        elif action == "buy_one_ship":
+            if player.gold >= player.ship_cost:
+                player.buy_ships(1)
+        elif action == "stabilize_first_buy":
+            self.stabilize_first_buy(game, player)
+
+    def stabilize_first_buy(self, game, player):
+        if player.ships <= 2 and game.buy_ships_disabled_reason(player) is None:
+            player.buy_ships(1)
+        if game.shipyard_disabled_reason(player) is None:
+            player.start_shipyard()
+        if game.fishing_dock_disabled_reason(player) is None:
+            player.build_or_repair_fishing_dock()
+        if game.guard_captain_disabled_reason(player) is None:
+            player.hire_guard_captain()
 
     def repair_damaged_raiders(self, player, rng):
         if player.damaged_ships <= 0:
@@ -411,6 +510,12 @@ class BotStrategy:
             return player.fishing_dock_built and not player.fishing_dock_disabled
         if project == "dry_dock":
             return player.shipyard_completed
+        if project == "admiralty":
+            return player.ships >= Rules.ADMIRAL_SHIPS_PER_SLOT
+        if project == "admiral":
+            return player.admiralty_completed
+        if project == "overtime":
+            return player.admiralty_completed and not player.admiralty_overtime_used
         if player.ships < MIN_FLEET_FOR_PROJECTS:
             return False
         if project in {"shipyard", "fort", "trade_guild"}:
@@ -437,6 +542,11 @@ class BotStrategy:
             return False
 
         launch_score = self.convoy_bias
+        if (
+            player.ships >= TREASURE_CONVOY_MIN_FLEET
+            and game.turn <= TREASURE_CONVOY_CORE_TURNS
+        ):
+            launch_score = max(launch_score, TREASURE_CONVOY_MIN_BIAS)
         if player.treasure_value >= Rules.TREASURE_BASE_VALUE + 4:
             launch_score += 0.25
         if game.turn >= Rules.MAX_TURNS - Rules.TREASURE_TRAVEL_TURNS - 1:
@@ -467,11 +577,14 @@ class BotStrategy:
                 player.trade_guild_started and not player.trade_guild_completed,
                 player.fishing_dock_started and not player.fishing_dock_built,
                 player.dry_dock_started and not player.dry_dock_completed,
+                player.admiralty_started and not player.admiralty_completed,
             ]
         )
 
     def choose_idle_construction_labor(self, player, ships, position=None):
         if not self.has_active_construction(player):
+            return 0
+        if player.has_treasure_at_sea or player.has_payroll_at_sea:
             return 0
 
         desired_idle = max(1, int(ships * self.construction_idle_bias + 0.999))
@@ -485,6 +598,25 @@ class BotStrategy:
             elif position["asset_gap"] >= 10 or position["income_edge"] > 0:
                 desired_idle = min(ships, desired_idle + 1)
         return min(ships, desired_idle)
+
+    def convoy_escort_guards(self, player, opponent, ships_available):
+        if ships_available <= 0:
+            return 0
+        if not player.has_treasure_at_sea and not player.has_payroll_at_sea:
+            return 0
+
+        enemy_raid_capacity = opponent.ships
+        if enemy_raid_capacity <= 0:
+            return 0
+
+        escort_target = min(enemy_raid_capacity, ships_available)
+        if player.has_treasure_at_sea:
+            escort_target = min(escort_target, max(2, player.treasure_turns_remaining))
+        if player.has_payroll_at_sea:
+            escort_target = min(escort_target, max(2, player.payroll_turns_remaining + 1))
+        if player.has_treasure_at_sea and player.has_payroll_at_sea:
+            escort_target = min(enemy_raid_capacity, ships_available)
+        return escort_target
 
     def evaluate_position(self, game, player, opponent):
         asset_gap = player.asset_score - opponent.asset_score
@@ -536,6 +668,10 @@ class BotStrategy:
         if player.dry_dock_completed:
             score += 2
         elif player.dry_dock_started:
+            score += 1
+        if player.admiralty_completed:
+            score += 3 + player.admirals
+        elif player.admiralty_started:
             score += 1
         if player.treasure_value > Rules.TREASURE_BASE_VALUE:
             score += 1
@@ -660,12 +796,18 @@ class BotStrategy:
             "fort",
             "fishing_dock",
             "dry_dock",
+            "admiralty",
+            "admiral",
+            "overtime",
         }:
             return False
         if position["fleet_gap"] <= -2 and project not in {
             "shipyard",
             "fishing_dock",
             "dry_dock",
+            "admiralty",
+            "admiral",
+            "overtime",
         }:
             return False
         if position["can_threaten_port"]:
@@ -724,12 +866,48 @@ def load_strategy(strategy_path):
         fishing_dock_bias=strategy_data.get("fishing_dock_bias"),
         fishing_boat_bias=strategy_data.get("fishing_boat_bias"),
         dry_dock_bias=strategy_data.get("dry_dock_bias"),
+        admiralty_bias=strategy_data.get("admiralty_bias"),
+        admiral_bias=strategy_data.get("admiral_bias"),
+        overtime_bias=strategy_data.get("overtime_bias"),
         repair_bias=strategy_data.get("repair_bias", 0.5),
         construction_idle_bias=strategy_data.get("construction_idle_bias", 0.0),
+        opening_book=load_opening_book(strategy_data.get("opening_book", [])),
         adaptive=strategy_data.get("adaptive", False),
         adaptation_strength=strategy_data.get("adaptation_strength", 0.0),
         adaptation_turns=strategy_data.get("adaptation_turns", 3),
     )
+
+
+def load_opening_book(opening_book_data):
+    opening_book = []
+    for opening_data in opening_book_data:
+        turns = {}
+        for turn, turn_data in opening_data.get("turns", {}).items():
+            allocation_data = turn_data.get("allocation")
+            allocation = None
+            if allocation_data is not None:
+                allocation = Allocation(
+                    trade=allocation_data.get("trade", 0),
+                    raid=allocation_data.get("raid", 0),
+                    guard=allocation_data.get("guard", 0),
+                    fire=allocation_data.get("fire", 0),
+                )
+            turns[int(turn)] = {
+                "allocation": allocation,
+                "buy_actions": turn_data.get("buy_actions", [])[:],
+                "continue_buy_phase": turn_data.get("continue_buy_phase", False),
+            }
+        opening_book.append(
+            {
+                "name": opening_data.get("name", "opening"),
+                "code_id": opening_data.get("code_id", ""),
+                "source": opening_data.get("source", "strategy file"),
+                "weight": opening_data.get("weight", 1),
+                "anti_aggro": opening_data.get("anti_aggro", False),
+                "turns": turns,
+            }
+        )
+    return opening_book
 
 
 def random_evolving_strategy(rng, name="Evolving"):
@@ -754,6 +932,9 @@ def random_evolving_strategy(rng, name="Evolving"):
         fishing_dock_bias=rng.random(),
         fishing_boat_bias=rng.random(),
         dry_dock_bias=rng.random(),
+        admiralty_bias=rng.random(),
+        admiral_bias=rng.random(),
+        overtime_bias=rng.random(),
         repair_bias=rng.random(),
         construction_idle_bias=rng.random(),
     )
@@ -828,6 +1009,9 @@ def copy_strategy(strategy):
         fishing_dock_bias=strategy.fishing_dock_bias,
         fishing_boat_bias=strategy.fishing_boat_bias,
         dry_dock_bias=strategy.dry_dock_bias,
+        admiralty_bias=strategy.admiralty_bias,
+        admiral_bias=strategy.admiral_bias,
+        overtime_bias=strategy.overtime_bias,
         repair_bias=strategy.repair_bias,
         construction_idle_bias=strategy.construction_idle_bias,
         opening_book=strategy.opening_book,
@@ -842,7 +1026,7 @@ def clamp(value, minimum, maximum):
 
 
 def strategy_record(strategy):
-    return {
+    record = {
         "name": strategy.name,
         "trade_weight": strategy.trade_weight,
         "raid_weight": strategy.raid_weight,
@@ -859,9 +1043,53 @@ def strategy_record(strategy):
         "fishing_dock_bias": strategy.fishing_dock_bias,
         "fishing_boat_bias": strategy.fishing_boat_bias,
         "dry_dock_bias": strategy.dry_dock_bias,
+        "admiralty_bias": strategy.admiralty_bias,
+        "admiral_bias": strategy.admiral_bias,
+        "overtime_bias": strategy.overtime_bias,
         "repair_bias": strategy.repair_bias,
         "construction_idle_bias": strategy.construction_idle_bias,
         "adaptive": strategy.adaptive,
         "adaptation_strength": strategy.adaptation_strength,
         "adaptation_turns": strategy.adaptation_turns,
+    }
+    if strategy.opening_book:
+        record["opening_book"] = opening_book_record(strategy.opening_book)
+    return record
+
+
+def opening_book_record(opening_book):
+    return [
+        {
+            "name": opening.get("name", "opening"),
+            "code_id": opening.get("code_id", ""),
+            "source": opening.get("source", ""),
+            "weight": opening.get("weight", 1),
+            "anti_aggro": opening.get("anti_aggro", False),
+            "turns": {
+                str(turn): opening_turn_record(turn_data)
+                for turn, turn_data in opening.get("turns", {}).items()
+            },
+        }
+        for opening in opening_book
+    ]
+
+
+def opening_turn_record(turn_data):
+    record = {
+        "buy_actions": turn_data.get("buy_actions", [])[:],
+    }
+    allocation = turn_data.get("allocation")
+    if allocation is not None:
+        record["allocation"] = allocation_record(allocation)
+    if turn_data.get("continue_buy_phase", False):
+        record["continue_buy_phase"] = True
+    return record
+
+
+def allocation_record(allocation):
+    return {
+        "trade": allocation.trade,
+        "raid": allocation.raid,
+        "guard": allocation.guard,
+        "fire": allocation.fire,
     }

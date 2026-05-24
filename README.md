@@ -83,7 +83,7 @@
 ## Version 0.17
 
 - Human-vs-AI games are recorded after completion.
-- Records are appended as JSON lines to `ai_game_log.jsonl` by default.
+- Records are appended as JSON lines to `artifacts/logs/ai_game_log.jsonl` by default.
 - Use `--ai-log path/to/file.jsonl` to choose a different log file.
 - Each record includes the AI strategy, winner, final scores, and turn-by-turn orders.
 - Run `python3 main.py --ai-log-summary` to summarize recorded human-vs-AI results.
@@ -94,13 +94,13 @@
 - Run `python3 main.py --train-evolving 25 --learning-rate 0.25`.
 - The trainer mutates candidate strategies, evaluates them against the bot roster, and blends toward better candidates.
 - Use `--training-games` and `--mutation-scale` to tune how noisy or exploratory training should be.
-- Use `--evolved-output evolved_strategy.json` to save the final learned weights.
+- Use `--evolved-output artifacts/strategies/evolved_strategy.json` to save the final learned weights.
 
 ## Version 0.19
 
 - Evolving strategy training can now export learning curves.
-- Use `--training-history training.csv` or `training.json` for per-generation metrics.
-- Use `--training-graph training.svg` to create a browser-viewable win-rate graph.
+- Use `--training-history artifacts/training/training.csv` or `artifacts/training/training.json` for per-generation metrics.
+- Use `--training-graph artifacts/training/training.svg` to create a browser-viewable win-rate graph.
 
 ## Version 0.20
 
@@ -110,8 +110,8 @@
 ## Version 0.21
 
 - Added evolved strategy benchmarking against the full bot roster.
-- Run `python3 main.py --evaluate-strategy evolved_strategy.json --eval-games 500`.
-- Use `--eval-output benchmark.csv` or `benchmark.json` to save per-opponent results.
+- Run `python3 main.py --evaluate-strategy artifacts/strategies/evolved_strategy.json --eval-games 500`.
+- Use `--eval-output artifacts/benchmarks/benchmark.csv` or `artifacts/benchmarks/benchmark.json` to save per-opponent results.
 
 ## Version 0.22
 
@@ -237,17 +237,49 @@
 - Harbor details now include an ASCII harbor-works strip for shipyards, forts, guilds, fishing docks, dry docks, fire plans, guard captains, and convoys.
 - Inactive harbor works are dimmed, active or completed upgrades are colored, and burned or disabled infrastructure is shown in red.
 - Shipyards now remember when they have been burned down for status/UI purposes; rebuilding clears the burned marker.
+- Completed dry docks now count as 2 asset value, making them useful harbor infrastructure without appreciating like forts or trade guilds.
+
+## Version 0.44
+
+- Added the Admiralty, a command building costing 10 gold and 5 labor.
+- Completed Admiralties count as 15 asset value, unlock Admirals, and unlock one once-per-game overtime construction action.
+- Admirals cost 3 gold each, add 1 gold to payroll cost each, and are recruitable by fleet-size slots: 1 Admiral per 10 ships, up to 5.
+- Admiral recruitment slots only gate hiring; recruited Admirals stay active if the fleet later shrinks.
+- In raid-vs-guard battles, each Admiral provides one command intervention per resolution.
+- Admiral-commanded forces turn exactly 2 overwhelming-force losses into 3 losses when possible.
+- Admiral-commanded active raid or guard lines can save one undamaged ship from sinking; it becomes damaged instead. Already-damaged active ships still sink first.
+- Active raiders now skirmish with opposing active raiders only after guard battles, port attacks, convoys, and trade have been resolved. Normal battle hits apply, but healthy raiders become damaged instead of sinking while already-damaged raiders sink.
+- Completed Admiralties add port conscripts when the home port is attacked: each start-of-resolution port worker adds 1 required raid ship to destroy the port.
+- Admiralty overtime can instantly complete one eligible unfinished project for double its base gold cost and no labor.
+- Overtime targets are shipyard, fort, trade guild, fishing docks, dry dock, and fire ship plans. Dry dock still requires a completed shipyard.
+- Bot evolution now supports `admiralty_bias`, `admiral_bias`, and `overtime_bias`, and training/benchmark summaries track Admiralty completions and average Admirals.
+- Added `Nash Admiral`, a benchmark bot using the shared Nash core opening book: mostly triple guard, some triple raid, a small triple trade counterweight, and a shipyard hold branch.
+- Added `--train-start-strategy` so evolving training can start from a named roster bot such as `Nash Admiral` or from a strategy JSON file.
+- Added [Opening Principles](OPENINGS.md), a human-readable guide to the reusable opening book and early-game doctrine.
 
 ## Bot Meta Notes
+
+## Artifact Layout
+
+- Generated strategies live in `artifacts/strategies/`.
+- Benchmark exports live in `artifacts/benchmarks/`.
+- Training histories and graphs live in `artifacts/training/`.
+- Human-vs-AI logs live in `artifacts/logs/`.
+- Keep the repository root for source modules, documentation, and project metadata.
 
 ### Human Shadow
 
 - `Human Shadow` is a mirror of the current human game log, not an optimized benchmark bot.
-- The current profile is based on all 16 recorded human-vs-AI games in `ai_game_log.jsonl`, with extra weight on the current fishing-dock and trade-guild rules.
-- Its order mix favors very heavy trade, selective raids, meaningful guards, and almost no fire ships.
-- Its buy pattern favors shipyard, trade guild, fishing docks, fishing boats, and more frequent guard captains than older versions.
+- The current profile is based on all 23 recorded human-vs-AI games in `artifacts/logs/ai_game_log.jsonl`, with extra weight on recent raid-fatigue, fishing-dock, and trade-guild rules.
+- Its order mix still becomes trade-heavy after the opener, but recent games add more raid pressure and retain meaningful guards with almost no fire ships.
+- Its buy pattern favors shipyard, fishing docks, trade guild, fishing boats, and more frequent guard captains than older versions, with light dry-dock curiosity.
 - Its first three turns are selected from an opening book mined from human-won games, then it falls back to weighted play.
 - After the opening, weighted bots adjust to balance of power: fleet gap, asset gap, income engine, port-kill threats, and fleet pressure.
+
+### Opening Books
+
+- Reusable bot opening books live in `bot_openings.py`.
+- The Nash-family bots use the shared `NASH_CORE_OPENING_BOOK`; see [Opening Principles](OPENINGS.md) for the human-readable doctrine and named lines.
 
 ### The Red Tide
 

@@ -4,6 +4,7 @@ import select
 import shutil
 import sys
 import termios
+import time
 import tty
 from collections import defaultdict
 
@@ -142,11 +143,25 @@ def prepare_dashboard_terminal(dashboard):
         return None
     settings = termios.tcgetattr(sys.stdin)
     tty.setcbreak(sys.stdin.fileno())
-    return settings
+    use_alternate_screen = sys.stdout.isatty()
+    if use_alternate_screen:
+        sys.stdout.write("\033[?1049h\033[?25l\033[H\033[J")
+        sys.stdout.flush()
+    return {
+        "termios": settings,
+        "alternate_screen": use_alternate_screen,
+    }
 
 
 def restore_dashboard_terminal(settings):
-    if settings is not None:
+    if settings is None:
+        return
+    if isinstance(settings, dict):
+        if settings.get("alternate_screen"):
+            sys.stdout.write("\033[?25h\033[?1049l")
+            sys.stdout.flush()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings["termios"])
+    else:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
 
@@ -156,6 +171,9 @@ def handle_dashboard_input(
     learning_rate,
     mutation_scale,
     games_per_bot,
+    generations,
+    current_generation,
+    dashboard_window,
     restart_callback,
 ):
     key = read_dashboard_key()
@@ -166,6 +184,8 @@ def handle_dashboard_input(
             learning_rate,
             mutation_scale,
             games_per_bot,
+            generations,
+            dashboard_window,
             "Press h for controls.",
             "none",
         )
@@ -188,6 +208,24 @@ def handle_dashboard_input(
     elif key == "G":
         games_per_bot += 5
         message = f"training games raised to {games_per_bot}"
+    elif key == "e":
+        generations += 100
+        message = f"run extended to {generations} generations"
+    elif key == "E":
+        generations += 500
+        message = f"run extended to {generations} generations"
+    elif key == "d":
+        generations = max(current_generation, generations - 100)
+        message = f"run shortened to {generations} generations"
+    elif key == "D":
+        generations = max(current_generation, generations - 500)
+        message = f"run shortened to {generations} generations"
+    elif key == "v":
+        dashboard_window = max(25, dashboard_window - 25)
+        message = f"dashboard window lowered to {dashboard_window}"
+    elif key == "V":
+        dashboard_window += 25 if dashboard_window < 250 else 100
+        message = f"dashboard window raised to {dashboard_window}"
     elif key == "r":
         current, current_stats = restart_callback(games_per_bot)
         message = "restarted from a fresh random strategy"
@@ -197,6 +235,8 @@ def handle_dashboard_input(
             learning_rate,
             mutation_scale,
             games_per_bot,
+            generations,
+            dashboard_window,
             message,
             "restart",
         )
@@ -207,11 +247,13 @@ def handle_dashboard_input(
             learning_rate,
             mutation_scale,
             games_per_bot,
+            generations,
+            dashboard_window,
             "starting a new run",
             "new",
         )
     elif key == "h":
-        message = "controls: [] lr, -/+ mutation, g/G games, r restart, n new run"
+        message = "controls: [] lr, -/+ mutation, g/G games, e/E extend, d/D shorten, v/V window, r restart, n new run"
     else:
         message = f"ignored key {key!r}; press h for controls"
 
@@ -221,6 +263,8 @@ def handle_dashboard_input(
         learning_rate,
         mutation_scale,
         games_per_bot,
+        generations,
+        dashboard_window,
         message,
         "none",
     )
@@ -249,6 +293,10 @@ def wait_for_dashboard_finish_choice(
     benchmark_games,
     previous_stats,
     training_events,
+    run_started_at,
+    seed_branch_chance,
+    workers,
+    dashboard_window,
     benchmark_callback,
     save_callback,
 ):
@@ -275,6 +323,10 @@ def wait_for_dashboard_finish_choice(
             benchmark_rows=benchmark_rows,
             previous_stats=previous_stats,
             training_events=training_events,
+            run_started_at=run_started_at,
+            seed_branch_chance=seed_branch_chance,
+            workers=workers,
+            dashboard_window=dashboard_window,
         )
         key = sys.stdin.read(1)
         if key in {"s", "S", "\r", "\n"}:
@@ -309,6 +361,10 @@ def wait_for_dashboard_finish_choice(
                 benchmark_rows=benchmark_rows,
                 previous_stats=previous_stats,
                 training_events=training_events,
+                run_started_at=run_started_at,
+                seed_branch_chance=seed_branch_chance,
+                workers=workers,
+                dashboard_window=dashboard_window,
             )
             benchmark_rows = benchmark_callback(benchmark_games)
             message = "benchmark complete: b rerun, w write file, s save+exit, n new run"
@@ -323,6 +379,12 @@ def prompt_dashboard_line(terminal_settings, prompt):
     finally:
         if terminal_settings is not None:
             tty.setcbreak(sys.stdin.fileno())
+            if (
+                isinstance(terminal_settings, dict)
+                and terminal_settings.get("alternate_screen")
+            ):
+                sys.stdout.write("\033[?1049h\033[?25l\033[H\033[J")
+                sys.stdout.flush()
 
 
 def gauge(value, minimum, maximum, width=18):
@@ -354,7 +416,32 @@ def inverse_gauge(value, minimum, maximum, width=18):
 def average(stats, key):
     if stats["games"] == 0:
         return 0
-    return stats[key] / stats["games"]
+    return stats.get(key, 0) / stats["games"]
+
+
+def format_duration(seconds):
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes:d}m{seconds:02d}s"
+    return f"{seconds:d}s"
+
+
+def dashboard_timing(generation, generations, run_started_at, finished=False):
+    if run_started_at is None:
+        return "elapsed=--  eta=--"
+    elapsed = time.monotonic() - run_started_at
+    if finished or generation >= generations:
+        eta_text = "done"
+    elif generation <= 0:
+        eta_text = "--"
+    else:
+        seconds_per_generation = elapsed / generation
+        eta_text = format_duration(seconds_per_generation * (generations - generation))
+    return f"elapsed={format_duration(elapsed)}  eta={eta_text}"
 
 
 def delta_text(current, previous, precision=1, suffix="", lower_is_better=False):
@@ -377,27 +464,39 @@ def stat_rate(stats, numerator_key):
     return stats.get(numerator_key, 0) / stats["games"]
 
 
-def plateau_label(plateau_generations):
-    if plateau_generations == 0:
+def plateau_label(plateau_generations, dashboard_window=100):
+    fresh_threshold = max(1, dashboard_window // 100)
+    settling_threshold = max(1, dashboard_window // 4)
+    stuck_threshold = max(settling_threshold + 1, dashboard_window)
+    if plateau_generations <= fresh_threshold:
         return "fresh"
-    if plateau_generations < 25:
+    if plateau_generations < settling_threshold:
         return "settling"
-    if plateau_generations < 100:
+    if plateau_generations < stuck_threshold:
         return "stalled"
     return "stuck"
 
 
-def plateau_color(plateau_generations):
-    if plateau_generations == 0:
+def plateau_color(plateau_generations, dashboard_window=100):
+    fresh_threshold = max(1, dashboard_window // 100)
+    settling_threshold = max(1, dashboard_window // 4)
+    stuck_threshold = max(settling_threshold + 1, dashboard_window)
+    if plateau_generations <= fresh_threshold:
         return "green"
-    if plateau_generations < 25:
+    if plateau_generations < settling_threshold:
         return "cyan"
-    if plateau_generations < 100:
+    if plateau_generations < stuck_threshold:
         return "yellow"
     return "red"
 
 
-def training_health(stats, previous_stats, plateau_generations):
+def training_health(
+    stats,
+    previous_stats,
+    plateau_generations,
+    dashboard_window=100,
+    window_stats=None,
+):
     if previous_stats is None:
         return "scouting", "cyan"
 
@@ -429,15 +528,43 @@ def training_health(stats, previous_stats, plateau_generations):
     elif port_loss_delta > 1:
         score -= 1
 
+    dashboard_window = max(1, int(dashboard_window))
+    progress_ratio = plateau_generations / dashboard_window
+    recent_yield = (window_stats or {}).get("yield_rate", 0)
+    recent_pressure = (window_stats or {}).get("candidate_pressure", 0)
+
+    if progress_ratio >= 1.0 and recent_yield <= 0:
+        if score >= 3:
+            return "banked", "cyan"
+        if score >= 1:
+            return "coasting", "yellow"
+        if recent_pressure < 0.03:
+            return "frozen", "yellow"
+        if recent_pressure < 0.10:
+            return "stale", "yellow"
+        return "blocked", "red"
+
+    if progress_ratio >= 0.50 and recent_yield <= 0:
+        if score >= 3:
+            return "banked", "cyan"
+        if score >= 1:
+            return "coasting", "yellow"
+
+    if progress_ratio >= 0.25 and recent_yield <= 0:
+        if score >= 3:
+            return "proven", "cyan"
+        if score >= 1:
+            return "flat", "yellow"
+
     if score >= 3:
         label, color = "surging", "green"
     elif score >= 1:
         label, color = "improving", "green"
     elif score <= -2:
         label, color = "regressing", "red"
-    elif plateau_generations >= 100:
+    elif plateau_generations >= dashboard_window:
         label, color = "stale", "red"
-    elif plateau_generations >= 25:
+    elif plateau_generations >= max(1, dashboard_window // 4):
         label, color = "flat", "yellow"
     else:
         label, color = "mixed", "yellow"
@@ -449,12 +576,15 @@ def training_window_stats(events):
     total = len(events)
     counts = {"learned": 0, "fragile": 0, "kept": 0}
     candidate_improved = 0
+    seed_branches = 0
     for event in events:
         status = event.get("status")
         if status in counts:
             counts[status] += 1
         if event.get("candidate_improved"):
             candidate_improved += 1
+        if event.get("seed_branch"):
+            seed_branches += 1
 
     learned = counts["learned"]
     fragile = counts["fragile"]
@@ -487,6 +617,7 @@ def training_window_stats(events):
         "learned": learned,
         "fragile": fragile,
         "kept": kept,
+        "seed_branches": seed_branches,
         "yield_rate": yield_rate,
         "fragility": fragility,
         "candidate_pressure": candidate_pressure,
@@ -514,8 +645,13 @@ def render_training_dashboard(
     benchmark_rows=None,
     previous_stats=None,
     training_events=None,
+    run_started_at=None,
+    seed_branch_chance=0.0,
+    workers=1,
+    dashboard_window=100,
 ):
-    print("\033[2J\033[H", end="")
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.flush()
     print(
         paint(
             f"=== EVOLVING STRATEGY DASHBOARD ({generation}/{generations}) ===",
@@ -552,13 +688,16 @@ def render_training_dashboard(
         pressure_color(port_loss_rate, 0.05, 0.2),
         bold=port_loss_rate >= 0.2,
     )
-    plateau_status = plateau_label(plateau_generations)
+    dashboard_window = max(1, int(dashboard_window))
+    window = training_window_stats(training_events or [])
+    plateau_status = plateau_label(plateau_generations, dashboard_window)
     health_label, health_color = training_health(
         stats,
         previous_stats,
         plateau_generations,
+        dashboard_window,
+        window,
     )
-    window = training_window_stats(training_events or [])
     yield_text = paint(
         f"{window['yield_rate'] * 100:.1f}%",
         yield_color(window["yield_rate"]),
@@ -585,7 +724,7 @@ def render_training_dashboard(
     status_lines = [
         (
             f"status={paint(status, status_color, bold=bool(status_color))}  "
-            f"plateau={paint(f'{plateau_status}({plateau_generations})', plateau_color(plateau_generations), bold=plateau_generations >= 100)}  "
+            f"plateau={paint(f'{plateau_status}({plateau_generations})', plateau_color(plateau_generations, dashboard_window), bold=plateau_generations >= dashboard_window)}  "
             f"health={paint(health_label, health_color, bold=True)}  "
             f"message={paint(dashboard_message, 'white')}"
         ),
@@ -609,23 +748,31 @@ def render_training_dashboard(
         ),
         (
             f"lr={learning_rate:.2f}  mutation={mutation_scale:.2f}  "
-            f"games/opponent={games_per_bot}"
+            f"games/opponent={games_per_bot}  "
+            f"workers={workers}  "
+            f"seed-branch={seed_branch_chance * 100:.0f}%  "
+            f"{dashboard_timing(generation, generations, run_started_at, finished)}"
         ),
         (
             f"win {gauge(win_rate, 0, 1)}  "
             f"min {gauge(min_matchup, 0, 1)}  "
-            f"plateau {inverse_gauge(min(plateau_generations, 100), 0, 100)}"
+            f"plateau {inverse_gauge(min(plateau_generations, dashboard_window), 0, dashboard_window)}"
         ),
     ]
 
     training_lines = [
-        f"window n={window['total']}  mode={paint(window['mode'], window['color'], bold=True)}",
+        f"window n={window['total']}/{dashboard_window}  mode={paint(window['mode'], window['color'], bold=True)}",
         f"yield={yield_text}  candidate={candidate_pressure_text}",
+        f"seed branches={window['seed_branches']}/{window['total']}",
         f"fragility={fragility_text}",
         f"learned/fragile/kept={window['learned']}/{window['fragile']}/{window['kept']}",
         (
             f"damage={average(stats, 'raid_damage_events_total'):.1f}/game"
             f"{delta_text(average(stats, 'raid_damage_events_total'), average(previous_stats, 'raid_damage_events_total') if previous_stats else None, precision=1, lower_is_better=True)}"
+        ),
+        (
+            f"skirmish={average(stats, 'raid_skirmish_damage_total'):.1f} dmg/"
+            f"{average(stats, 'raid_skirmish_sunk_total'):.1f} sunk"
         ),
         (
             f"repairs={average(stats, 'raid_repairs_total'):.1f}/game"
@@ -638,6 +785,11 @@ def render_training_dashboard(
         (
             f"smugglers={average(stats, 'guard_captain_ship_captures_total'):.1f}/game"
             f"{delta_text(average(stats, 'guard_captain_ship_captures_total'), average(previous_stats, 'guard_captain_ship_captures_total') if previous_stats else None, precision=1)}"
+        ),
+        (
+            f"admiralty={average(stats, 'admiralty_completed'):.1f}/game  "
+            f"admirals={average(stats, 'admirals_total'):.1f}/game"
+            f"{delta_text(average(stats, 'admirals_total'), average(previous_stats, 'admirals_total') if previous_stats else None, precision=1)}"
         ),
     ]
     strategy_lines = [
@@ -661,12 +813,16 @@ def render_training_dashboard(
             f"econ    fishing_dock={strategy.fishing_dock_bias:.2f}  "
             f"boat={strategy.fishing_boat_bias:.2f}  dry_dock={strategy.dry_dock_bias:.2f}"
         ),
+        (
+            f"cmd     admiralty={strategy.admiralty_bias:.2f}  "
+            f"admiral={strategy.admiral_bias:.2f}  overtime={strategy.overtime_bias:.2f}"
+        ),
         f"priority {strategy.build_priority}",
     ]
     control_text = (
         "b benchmark  w write file  s save+exit  n new run"
         if finished
-        else "[] lr  -/+ mutation  g/G games  r restart  n new run  h help"
+        else "[] lr  -/+ mutation  g/G games  e/E extend  d/D shorten  v/V window  r restart  n new run  h help"
     )
 
     report_lines = []
@@ -684,7 +840,7 @@ def render_training_dashboard(
     fixed_height = 1 + len(status_lines) + 2 + max(len(training_lines), len(strategy_lines)) + 4
     report_budget = max(6, terminal.lines - fixed_height)
     if finished and benchmark_rows is not None:
-        report_lines = report_lines[-report_budget:]
+        report_lines = pin_benchmark_header(report_lines, report_budget)
     else:
         report_lines = report_lines[-report_budget:]
 
@@ -711,6 +867,26 @@ def render_training_dashboard(
     print(flush=True)
 
 
+def pin_benchmark_header(lines, budget):
+    if len(lines) <= budget:
+        return lines
+    if len(lines) < 3 or budget <= 3:
+        return lines[-budget:]
+
+    prefix = []
+    body_start = 0
+    if lines[0].startswith("benchmark games/opponent:"):
+        prefix.append(lines[0])
+        body_start = 1
+
+    header = lines[body_start : body_start + 2]
+    body = lines[body_start + 2 :]
+    body_budget = max(0, budget - len(prefix) - len(header))
+    if body_budget == 0:
+        return [*prefix, *header]
+    return [*prefix, *header, *body[-body_budget:]]
+
+
 def dashboard_benchmark_lines(rows, weakest_count=None):
     total = defaultdict(int)
     for row in rows:
@@ -726,16 +902,16 @@ def dashboard_benchmark_lines(rows, weakest_count=None):
             "loss_turns_total",
             "score_total",
             "opponent_score_total",
+            "admiralty_completed",
+            "admirals_total",
         ]:
             total[key] += row[key]
 
     total_row = dict(total)
     total_row["opponent"] = "TOTAL"
     lines = [
-        "Opponent         Games  Wins  Losses  Draws  Win rate  "
-        "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg",
-        "---------------  -----  ----  ------  -----  --------  "
-        "---------  -----------  ---------  ---------  ----------  ----------  -------",
+        "Opponent          Games  W-L-D          Win    Port W/L   Turns  Win/LossT  Assets/Opp  Admty/Adm",
+        "---------------  -----  -------------  ------  ---------  -----  ---------  ----------  ---------",
     ]
     for row in rows:
         lines.append(dashboard_benchmark_row(row))
@@ -753,6 +929,8 @@ def dashboard_benchmark_row(row, total=False):
     avg_opponent_score = row["opponent_score_total"] / games if games else 0
     port_loss_rate = row["port_losses"] / games if games else 0
     port_win_rate = row["port_wins"] / games if games else 0
+    admiralty_rate = row.get("admiralty_completed", 0) / games if games else 0
+    avg_admirals = row.get("admirals_total", 0) / games if games else 0
 
     opponent = f"{row['opponent']:<15}"
     if total:
@@ -762,30 +940,35 @@ def dashboard_benchmark_row(row, total=False):
         rate_color(win_rate),
         bold=win_rate < 0.5 or win_rate >= 0.85,
     )
-    port_wins = paint(
-        f"{row['port_wins']:>9}",
-        "green" if port_win_rate >= 0.2 else None,
-        bold=port_win_rate >= 0.5,
-    )
-    port_losses = paint(
-        f"{row['port_losses']:>11}",
+    port_record = paint(
+        f"{row['port_wins']:>4}/{row['port_losses']:<4}",
         pressure_color(port_loss_rate, 0.05, 0.2),
-        bold=port_loss_rate >= 0.2,
+        bold=port_loss_rate >= 0.2 or port_win_rate >= 0.5,
     )
-    avg_score_text = paint(
-        f"{avg_score:>10.1f}",
-        "green" if avg_score > avg_opponent_score * 1.5 and games else None,
+    if port_win_rate >= 0.2 and port_loss_rate < 0.05:
+        port_record = paint(
+            f"{row['port_wins']:>4}/{row['port_losses']:<4}",
+            "green",
+            bold=port_win_rate >= 0.5,
+        )
+    win_loss_draw = f"{row['wins']}/{row['losses']}/{row['draws']}"
+    win_loss_draw = f"{win_loss_draw:>13}"
+    avg_turn_pair = f"{avg_win_turns:>4.1f}/{avg_loss_turns:<4.1f}"
+    asset_pair = f"{avg_score:>5.1f}/{avg_opponent_score:<4.1f}"
+    asset_pair = paint(
+        asset_pair,
+        "green" if avg_score > avg_opponent_score * 1.5 and games else (
+            "red" if avg_opponent_score > avg_score * 1.5 and games else None
+        ),
     )
-    avg_opponent_text = paint(
-        f"{avg_opponent_score:>7.1f}",
-        "red" if avg_opponent_score > avg_score * 1.5 and games else None,
+    admiralty_pair = paint(
+        f"{admiralty_rate * 100:>3.0f}%/{avg_admirals:<3.1f}",
+        "cyan" if admiralty_rate >= 0.2 or avg_admirals >= 0.5 else None,
+        bold=admiralty_rate >= 0.5 or avg_admirals >= 1.5,
     )
-
-    return (
-        f"{opponent}  {games:>5}  {row['wins']:>4}  "
-        f"{row['losses']:>6}  {row['draws']:>5}  "
-        f"{win_rate_text}  {port_wins}  "
-        f"{port_losses}  {avg_turns:>9.1f}  "
-        f"{avg_win_turns:>9.1f}  {avg_loss_turns:>10.1f}  "
-        f"{avg_score_text}  {avg_opponent_text}"
+    row_text = (
+        f"{opponent}  {games:>5}  {win_loss_draw}  "
+        f"{win_rate_text}  {port_record}  {avg_turns:>5.1f}  "
+        f"{avg_turn_pair}  {asset_pair}  {admiralty_pair}"
     )
+    return row_text

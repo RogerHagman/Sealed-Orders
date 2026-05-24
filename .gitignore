@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Sealed Orders generated artifacts
+artifacts/**/*.csv
+artifacts/**/*.json
+artifacts/**/*.jsonl
+artifacts/**/*.svg
+!artifacts/**/.gitkeep

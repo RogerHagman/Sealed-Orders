@@ -67,7 +67,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--ai-log",
-        default="ai_game_log.jsonl",
+        default="artifacts/logs/ai_game_log.jsonl",
         help="where completed human-vs-AI games are recorded",
     )
     parser.add_argument(
@@ -98,6 +98,28 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
         help="random weight mutation size for --train-evolving",
+    )
+    parser.add_argument(
+        "--train-start-strategy",
+        help=(
+            "start --train-evolving from a named roster bot or strategy JSON "
+            "instead of a random strategy"
+        ),
+    )
+    parser.add_argument(
+        "--seed-branch-chance",
+        type=float,
+        default=0.0,
+        help=(
+            "chance per generation to mutate from --train-start-strategy "
+            "instead of the current incumbent"
+        ),
+    )
+    parser.add_argument(
+        "--training-workers",
+        type=int,
+        default=1,
+        help="CPU worker processes for --train-evolving simulation batches",
     )
     parser.add_argument(
         "--evolved-output",
@@ -140,6 +162,12 @@ if __name__ == "__main__":
         help="games per opponent for dashboard benchmarks after --train-evolving",
     )
     parser.add_argument(
+        "--training-dashboard-window",
+        type=int,
+        default=100,
+        help="rolling health window for --training-dashboard yield/fragility/candidate metrics",
+    )
+    parser.add_argument(
         "--evaluate-strategy",
         help="benchmark an evolved strategy JSON file against the bot roster",
     )
@@ -152,6 +180,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--eval-output",
         help="optional JSON or CSV file for --evaluate-strategy results",
+    )
+    parser.add_argument(
+        "--eval-workers",
+        type=int,
+        default=1,
+        help="CPU worker processes for --evaluate-strategy benchmarks",
     )
     parser.add_argument(
         "--self-play",
@@ -185,9 +219,19 @@ if __name__ == "__main__":
             games_per_opponent=args.eval_games,
             seed=args.seed,
             output_path=args.eval_output,
+            workers=args.eval_workers,
         )
     elif args.train_evolving is not None:
         from bot_playtest import train_evolving_strategy
+        from bot_roster import find_strategy
+        from bot_strategy import load_strategy
+
+        initial_strategy = None
+        if args.train_start_strategy:
+            try:
+                initial_strategy = find_strategy(args.train_start_strategy)
+            except ValueError:
+                initial_strategy = load_strategy(args.train_start_strategy)
 
         train_evolving_strategy(
             generations=args.train_evolving,
@@ -203,6 +247,10 @@ if __name__ == "__main__":
             dashboard=args.training_dashboard,
             dashboard_history=args.training_dashboard_history,
             dashboard_benchmark_games=args.training_dashboard_benchmark_games,
+            dashboard_window=args.training_dashboard_window,
+            initial_strategy=initial_strategy,
+            seed_branch_chance=args.seed_branch_chance,
+            workers=args.training_workers,
         )
     elif args.ai_log_summary:
         from bot_playtest import summarize_ai_games

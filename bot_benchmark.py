@@ -1,5 +1,7 @@
 import json
+import multiprocessing
 import random
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from pathlib import Path
 
@@ -8,8 +10,22 @@ from bot_runtime import SelfPlayGame
 from bot_strategy import load_strategy
 
 
-def evaluate_strategy_file(strategy_path, games_per_opponent=100, seed=None, output_path=None):
+def process_pool_context():
+    try:
+        return multiprocessing.get_context("fork")
+    except ValueError:
+        return None
+
+
+def evaluate_strategy_file(
+    strategy_path,
+    games_per_opponent=100,
+    seed=None,
+    output_path=None,
+    workers=1,
+):
     rng = random.Random(seed)
+    workers = max(1, int(workers or 1))
     strategy = load_strategy(strategy_path)
     opponents = default_bot_strategies()
     rows = []
@@ -19,10 +35,10 @@ def evaluate_strategy_file(strategy_path, games_per_opponent=100, seed=None, out
     if seed is not None:
         print(f"Seed: {seed}")
     print(f"Games per opponent: {games_per_opponent}")
+    if workers > 1:
+        print(f"Workers: {workers}")
 
-    for opponent in opponents:
-        row = evaluate_head_to_head(strategy, opponent, games_per_opponent, rng)
-        rows.append(row)
+    rows = benchmark_strategy(strategy, opponents, games_per_opponent, rng, workers)
 
     print_strategy_benchmark(rows)
     if output_path is not None:
@@ -43,6 +59,8 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
         "loss_turns_total": 0,
         "score_total": 0,
         "opponent_score_total": 0,
+        "admiralty_completed": 0,
+        "admirals_total": 0,
     }
 
     for game_index in range(games):
@@ -63,6 +81,10 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
         stats["turns_total"] += result["turns"]
         stats["score_total"] += result["scores"][strategy_index]
         stats["opponent_score_total"] += result["scores"][opponent_index]
+        player = game.players[strategy_index]
+        if player.admiralty_completed:
+            stats["admiralty_completed"] += 1
+        stats["admirals_total"] += player.admirals
 
         if result["winner_index"] == strategy_index:
             stats["wins"] += 1
@@ -83,11 +105,11 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
 def print_strategy_benchmark(rows):
     print(
         "\nOpponent         Games  Wins  Losses  Draws  Win rate  "
-        "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg"
+        "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg  Admty  Avg adm"
     )
     print(
         "---------------  -----  ----  ------  -----  --------  "
-        "---------  -----------  ---------  ---------  ----------  ----------  -------"
+        "---------  -----------  ---------  ---------  ----------  ----------  -------  -----  -------"
     )
 
     totals = defaultdict(int)
@@ -105,6 +127,8 @@ def print_strategy_benchmark(rows):
             "loss_turns_total",
             "score_total",
             "opponent_score_total",
+            "admiralty_completed",
+            "admirals_total",
         ]:
             totals[key] += row[key]
 
@@ -121,6 +145,8 @@ def print_strategy_benchmark_row(row):
     avg_loss_turns = row["loss_turns_total"] / row["losses"] if row["losses"] else 0
     avg_score = row["score_total"] / games if games else 0
     avg_opponent_score = row["opponent_score_total"] / games if games else 0
+    admiralty_rate = row.get("admiralty_completed", 0) / games if games else 0
+    avg_admirals = row.get("admirals_total", 0) / games if games else 0
 
     print(
         f"{row['opponent']:<15}  {games:>5}  {row['wins']:>4}  "
@@ -128,7 +154,8 @@ def print_strategy_benchmark_row(row):
         f"{win_rate * 100:>7.1f}%  {row['port_wins']:>9}  "
         f"{row['port_losses']:>11}  {avg_turns:>9.1f}  "
         f"{avg_win_turns:>9.1f}  {avg_loss_turns:>10.1f}  "
-        f"{avg_score:>10.1f}  {avg_opponent_score:>7.1f}"
+        f"{avg_score:>10.1f}  {avg_opponent_score:>7.1f}  "
+        f"{admiralty_rate * 100:>4.0f}%  {avg_admirals:>7.1f}"
     )
 
 
@@ -162,6 +189,8 @@ def write_strategy_benchmark_csv(rows, output_path):
         "avg_loss_turns",
         "avg_assets",
         "avg_opponent_assets",
+        "admiralty_completed_rate",
+        "avg_admirals",
     ]
     with output_path.open("w", encoding="utf-8") as output_file:
         output_file.write(",".join(headers))
@@ -182,13 +211,38 @@ def write_strategy_benchmark_csv(rows, output_path):
                 f"{row['loss_turns_total'] / row['losses'] if row['losses'] else 0:.6f}",
                 f"{row['score_total'] / games if games else 0:.6f}",
                 f"{row['opponent_score_total'] / games if games else 0:.6f}",
+                f"{row.get('admiralty_completed', 0) / games if games else 0:.6f}",
+                f"{row.get('admirals_total', 0) / games if games else 0:.6f}",
             ]
             output_file.write(",".join(str(value) for value in values))
             output_file.write("\n")
 
 
-def benchmark_strategy(strategy, opponents, games_per_opponent, rng):
-    return [
-        evaluate_head_to_head(strategy, opponent, games_per_opponent, rng)
-        for opponent in opponents
+def benchmark_strategy(strategy, opponents, games_per_opponent, rng, workers=1):
+    workers = max(1, int(workers or 1))
+    if workers <= 1 or len(opponents) <= 1:
+        return [
+            evaluate_head_to_head(strategy, opponent, games_per_opponent, rng)
+            for opponent in opponents
+        ]
+
+    seeds = [rng.randrange(2**63) for _ in opponents]
+    tasks = [
+        (strategy, opponent, games_per_opponent, seed)
+        for opponent, seed in zip(opponents, seeds)
     ]
+    with ProcessPoolExecutor(
+        max_workers=min(workers, len(opponents)),
+        mp_context=process_pool_context(),
+    ) as executor:
+        return list(executor.map(evaluate_head_to_head_worker, tasks))
+
+
+def evaluate_head_to_head_worker(args):
+    strategy, opponent, games_per_opponent, seed = args
+    return evaluate_head_to_head(
+        strategy,
+        opponent,
+        games_per_opponent,
+        random.Random(seed),
+    )

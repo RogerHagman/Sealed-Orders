@@ -210,7 +210,7 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.43"
+    VERSION = "0.44"
     STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -249,6 +249,14 @@ class Rules:
     SHIPYARD_RAID_REPAIR_COST = 2
     DRY_DOCK_COST = 2
     DRY_DOCK_LABOR_REQUIRED = 1
+    DRY_DOCK_ASSET_VALUE = 2
+    ADMIRALTY_COST = 10
+    ADMIRALTY_LABOR_REQUIRED = 5
+    ADMIRALTY_ASSET_VALUE = 15
+    ADMIRAL_COST = 3
+    ADMIRAL_MAX = 5
+    ADMIRAL_SHIPS_PER_SLOT = 10
+    ADMIRAL_PAYROLL_COST = 1
     MAX_TURNS = 12
     MONTHS = [
         "January",
@@ -353,9 +361,16 @@ class Nation:
         self.raid_damage_events = 0
         self.raid_repairs_total = 0
         self.damaged_raiders_sunk = 0
+        self.raid_skirmish_damage = 0
+        self.raid_skirmish_sunk = 0
         self.dry_dock_started = False
         self.dry_dock_labor = 0
         self.dry_dock_completed = False
+        self.admiralty_started = False
+        self.admiralty_labor = 0
+        self.admiralty_completed = False
+        self.admirals = 0
+        self.admiralty_overtime_used = False
 
     def status_report(self):
         for line in self.status_lines():
@@ -381,6 +396,8 @@ class Nation:
             f"{UI.field('Raid fatigue')} {self.raid_fatigue_status}",
             f"{UI.field('Port defences')} {self.port_defense_status}",
             f"{UI.field('Dry dock')} {self.dry_dock_status}",
+            f"{UI.field('Admiralty')} {self.admiralty_status}",
+            f"{UI.field('Admirals')} {self.admiral_status}",
             f"{UI.field('Fire ships')} {self.fire_ship_status}",
             f"{UI.field('Guard captains')} {self.guard_captain_status}",
         ]
@@ -401,6 +418,8 @@ class Nation:
             f"Raid: {self.raid_fatigue_status}",
             f"Port defences: {self.port_defense_status}",
             f"Dry dock: {self.dry_dock_status}",
+            f"Admiralty: {self.admiralty_status}",
+            f"Admirals: {self.admiral_status}",
             f"Fire: {self.fire_ship_status}",
             f"Captains: {self.guard_captain_status}",
         ]
@@ -473,6 +492,14 @@ class Nation:
         self.gold -= Rules.DRY_DOCK_COST
         self.dry_dock_started = True
 
+    def start_admiralty(self):
+        self.gold -= Rules.ADMIRALTY_COST
+        self.admiralty_started = True
+
+    def recruit_admiral(self):
+        self.gold -= Rules.ADMIRAL_COST
+        self.admirals += 1
+
     def destroy_shipyard(self):
         self.shipyard_started = False
         self.shipyard_completed = False
@@ -537,6 +564,17 @@ class Nation:
         if self.dry_dock_labor >= Rules.DRY_DOCK_LABOR_REQUIRED:
             self.dry_dock_completed = True
 
+        return applied_labor
+
+    def add_admiralty_labor(self, labor):
+        if not self.admiralty_started or self.admiralty_completed or labor <= 0:
+            return 0
+
+        remaining_labor = Rules.ADMIRALTY_LABOR_REQUIRED - self.admiralty_labor
+        applied_labor = min(labor, remaining_labor)
+        self.admiralty_labor += applied_labor
+        if self.admiralty_labor >= Rules.ADMIRALTY_LABOR_REQUIRED:
+            self.admiralty_completed = True
         return applied_labor
 
     def record_raid_actions(self, raid_actions):
@@ -615,6 +653,18 @@ class Nation:
         return self.fishing_boats * Rules.FISHING_BOAT_ASSET_VALUE
 
     @property
+    def dry_dock_value(self):
+        if self.dry_dock_completed:
+            return Rules.DRY_DOCK_ASSET_VALUE
+        return 0
+
+    @property
+    def admiralty_value(self):
+        if self.admiralty_completed:
+            return Rules.ADMIRALTY_ASSET_VALUE
+        return 0
+
+    @property
     def fishing_income(self):
         if self.fishing_dock_built and not self.fishing_dock_disabled:
             return self.fishing_boats * Rules.FISHING_BOAT_INCOME
@@ -649,6 +699,8 @@ class Nation:
                 parts.append(f"+0 captains ({self.guard_captains} stationed)")
         elif self.guard_captains:
             parts.append(f"+0 captains ({self.guard_captains}, requires fort)")
+        if self.admiralty_completed:
+            parts.append("+port workers as Admiralty conscripts when attacked")
         return (
             f"{self.port_attack_threshold} raid ships to destroy port "
             f"({', '.join(parts)})"
@@ -672,6 +724,8 @@ class Nation:
             + self.trade_guild_value
             + self.fishing_dock_value
             + self.fishing_boat_value
+            + self.dry_dock_value
+            + self.admiralty_value
         )
 
     @property
@@ -685,11 +739,16 @@ class Nation:
     @property
     def payroll_cost(self):
         cost = self.ships * Rules.PAYROLL_COST_PER_SHIP
+        cost += self.admirals * Rules.ADMIRAL_PAYROLL_COST
         if self.trade_guild_completed:
             cost *= 100 - Rules.TRADE_GUILD_PAYROLL_DISCOUNT_PERCENT
             cost = (cost + 99) // 100
 
         return cost
+
+    @property
+    def admiral_slots(self):
+        return min(Rules.ADMIRAL_MAX, self.ships // Rules.ADMIRAL_SHIPS_PER_SLOT)
 
     @property
     def treasure_status(self):
@@ -825,6 +884,31 @@ class Nation:
         return (
             f"not started ({Rules.DRY_DOCK_COST} gold, "
             f"{Rules.DRY_DOCK_LABOR_REQUIRED} labor, requires shipyard)"
+        )
+
+    @property
+    def admiralty_status(self):
+        if self.admiralty_completed:
+            overtime = "overtime used" if self.admiralty_overtime_used else "overtime ready"
+            return f"completed, {overtime}"
+        if self.admiralty_started:
+            return (
+                f"under construction, {self.admiralty_labor}/"
+                f"{Rules.ADMIRALTY_LABOR_REQUIRED} labor"
+            )
+        return (
+            f"not started ({Rules.ADMIRALTY_COST} gold, "
+            f"{Rules.ADMIRALTY_LABOR_REQUIRED} labor)"
+        )
+
+    @property
+    def admiral_status(self):
+        if not self.admiralty_completed:
+            return "locked (requires admiralty)"
+        return (
+            f"{self.admirals}/{Rules.ADMIRAL_MAX}, "
+            f"{self.admiral_slots} slot(s) by fleet size, "
+            f"+{self.admirals * Rules.ADMIRAL_PAYROLL_COST} payroll"
         )
 
     def launch_treasure(self):

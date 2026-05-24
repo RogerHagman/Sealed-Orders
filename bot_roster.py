@@ -1,142 +1,5 @@
-from game_state import Allocation
 from bot_strategy import BotStrategy
-
-
-HUMAN_WON_OPENING_BOOK = [
-    {
-        "name": "treasure_shipyard_shield",
-        "source": "Human wins vs Port Reaper and The Red Tide",
-        "anti_aggro": True,
-        "turns": {
-            1: {
-                "allocation": Allocation(guard=3),
-                "buy_actions": ["launch_treasure", "start_shipyard"],
-            },
-            2: {
-                "allocation": Allocation(guard=2),
-                "buy_actions": [],
-            },
-            3: {
-                "allocation": Allocation(guard=1),
-                "buy_actions": ["launch_treasure", "buy_ships"],
-            },
-        },
-    },
-    {
-        "name": "trade_guard_shipyard",
-        "source": "Human win vs Bastion Corsair",
-        "anti_aggro": True,
-        "turns": {
-            1: {
-                "allocation": Allocation(guard=3),
-                "buy_actions": ["launch_treasure", "start_shipyard"],
-            },
-            2: {
-                "allocation": Allocation(trade=2, guard=1),
-                "buy_actions": [],
-            },
-            3: {
-                "allocation": Allocation(),
-                "buy_actions": ["launch_treasure", "buy_ships"],
-            },
-        },
-    },
-    {
-        "name": "balanced_treasure_pressure",
-        "source": "Human wins vs Black Ledger and Builder",
-        "turns": {
-            1: {
-                "allocation": Allocation(trade=1, raid=1, guard=1),
-                "buy_actions": ["launch_treasure", "buy_ships"],
-            },
-            2: {
-                "allocation": Allocation(trade=1, guard=3),
-                "buy_actions": [],
-            },
-            3: {
-                "allocation": Allocation(trade=2, guard=2),
-                "buy_actions": ["launch_treasure", "buy_ships"],
-            },
-        },
-    },
-    {
-        "name": "raid_treasure_snowball",
-        "source": "Human wins vs Privateer and Merchant",
-        "turns": {
-            1: {
-                "allocation": Allocation(raid=3),
-                "buy_actions": ["launch_treasure", "buy_ships"],
-            },
-            2: {
-                "allocation": Allocation(raid=2, guard=2),
-                "buy_actions": ["start_shipyard"],
-            },
-            3: {
-                "allocation": Allocation(trade=1, raid=3, guard=1),
-                "buy_actions": ["launch_treasure", "start_trade_guild", "buy_ships"],
-            },
-        },
-    },
-    {
-        "name": "dock_guard_treasure",
-        "source": "Current-rule human wins vs Admiral and Opportunist",
-        "turns": {
-            1: {
-                "allocation": Allocation(guard=3),
-                "buy_actions": ["launch_treasure", "build_fishing_dock", "buy_ships"],
-            },
-            2: {
-                "allocation": Allocation(raid=2, guard=2),
-                "buy_actions": [],
-            },
-            3: {
-                "allocation": Allocation(raid=3),
-                "buy_actions": ["buy_fire_ship_plans", "launch_treasure", "buy_ships"],
-            },
-        },
-    },
-    {
-        "name": "guild_dock_buildout",
-        "source": "Current-rule human win vs Corsair Spark",
-        "turns": {
-            1: {
-                "allocation": Allocation(guard=3),
-                "buy_actions": ["start_trade_guild", "build_fishing_dock"],
-            },
-            2: {
-                "allocation": Allocation(),
-                "buy_actions": [],
-            },
-            3: {
-                "allocation": Allocation(raid=3),
-                "buy_actions": ["start_shipyard", "hire_guard_captain"],
-            },
-        },
-    },
-    {
-        "name": "guard_captain_harbor_lock",
-        "source": "Current-rule human win vs Harbor Lock",
-        "turns": {
-            1: {
-                "allocation": Allocation(trade=3),
-                "buy_actions": ["launch_treasure", "buy_ships"],
-            },
-            2: {
-                "allocation": Allocation(trade=1, guard=4),
-                "buy_actions": ["hire_guard_captain"],
-            },
-            3: {
-                "allocation": Allocation(trade=1, raid=1, guard=3),
-                "buy_actions": [
-                    "start_shipyard",
-                    "build_fishing_dock",
-                    "hire_guard_captain",
-                    "buy_fire_ship_plans",
-                ],
-            },
-        },
-    },
-]
+from bot_openings import HUMAN_WON_OPENING_BOOK, NASH_CORE_OPENING_BOOK
 
 
 def default_bot_strategies():
@@ -251,29 +114,35 @@ def default_bot_strategies():
         ),
         BotStrategy(
             name="Human Shadow",
-            trade_weight=5.2,
-            raid_weight=1.0,
-            guard_weight=1.05,
-            fire_weight=0.06,
+            trade_weight=5.0,
+            raid_weight=1.65,
+            guard_weight=1.35,
+            fire_weight=0.05,
             build_priority=[
                 "shipyard",
-                "trade_guild",
                 "fishing_dock",
+                "trade_guild",
                 "fishing_boat",
                 "guard_captain",
-                "fort",
                 "fire_plans",
+                "fort",
+                "dry_dock",
             ],
-            convoy_bias=0.65,
-            ship_bias=0.9,
-            shipyard_bias=0.72,
-            fort_bias=0.35,
-            trade_guild_bias=0.6,
-            fishing_dock_bias=0.7,
-            fishing_boat_bias=0.75,
-            guard_captain_bias=0.35,
-            fire_plans_bias=0.4,
-            construction_idle_bias=0.72,
+            convoy_bias=0.6,
+            ship_bias=0.92,
+            shipyard_bias=0.78,
+            fort_bias=0.32,
+            trade_guild_bias=0.68,
+            fishing_dock_bias=0.82,
+            fishing_boat_bias=0.86,
+            guard_captain_bias=0.58,
+            fire_plans_bias=0.48,
+            dry_dock_bias=0.18,
+            admiralty_bias=0.08,
+            admiral_bias=0.05,
+            overtime_bias=0.08,
+            repair_bias=0.7,
+            construction_idle_bias=0.8,
             opening_book=HUMAN_WON_OPENING_BOOK,
         ),
         BotStrategy(
@@ -304,6 +173,101 @@ def default_bot_strategies():
             adaptive=True,
             adaptation_strength=1.0,
             adaptation_turns=3,
+        ),
+        BotStrategy(
+            name="Nash Admiral",
+            trade_weight=2.1,
+            raid_weight=3.0,
+            guard_weight=3.2,
+            fire_weight=0.55,
+            build_priority=[
+                "shipyard",
+                "fort",
+                "guard_captain",
+                "fishing_dock",
+                "fishing_boat",
+                "trade_guild",
+                "dry_dock",
+                "fire_plans",
+                "admiralty",
+                "admiral",
+            ],
+            convoy_bias=0.12,
+            ship_bias=0.90,
+            shipyard_bias=0.92,
+            fort_bias=0.58,
+            trade_guild_bias=0.34,
+            fishing_dock_bias=0.64,
+            fishing_boat_bias=0.58,
+            guard_captain_bias=0.58,
+            fire_plans_bias=0.22,
+            dry_dock_bias=0.36,
+            admiralty_bias=0.12,
+            admiral_bias=0.12,
+            overtime_bias=0.12,
+            repair_bias=0.58,
+            construction_idle_bias=0.48,
+            opening_book=NASH_CORE_OPENING_BOOK,
+        ),
+        BotStrategy(
+            name="Nash Fireline",
+            trade_weight=0.32369146686967376,
+            raid_weight=3.1988427334095237,
+            guard_weight=0.2647021501068245,
+            fire_weight=3.2646768322154216,
+            build_priority=[
+                "guard_captain",
+                "fishing_boat",
+                "admiralty",
+                "overtime",
+                "fishing_dock",
+                "fire_plans",
+                "dry_dock",
+                "admiral",
+            ],
+            convoy_bias=0.5921148217036665,
+            ship_bias=0.7594042041053094,
+            shipyard_bias=0.1347485091808977,
+            fort_bias=0.09178978676684409,
+            trade_guild_bias=0.09401226583653838,
+            fishing_dock_bias=0.677382537455761,
+            fishing_boat_bias=0.8139313881970534,
+            guard_captain_bias=0.13681900579190934,
+            fire_plans_bias=0.4368188642067561,
+            dry_dock_bias=0.2290602773853748,
+            admiralty_bias=0.32819645926129626,
+            admiral_bias=0.22424933165492264,
+            overtime_bias=0.7930686453505076,
+            repair_bias=0.14586993575674678,
+            construction_idle_bias=0.2367567825180562,
+            opening_book=NASH_CORE_OPENING_BOOK,
+        ),
+        BotStrategy(
+            name="Crown Ledger",
+            trade_weight=4.005317240004103,
+            raid_weight=1.9595210631848645,
+            guard_weight=0.4777182500931804,
+            fire_weight=2.0271128767645825,
+            build_priority=[
+                "guard_captain",
+                "admiralty",
+                "admiral",
+            ],
+            convoy_bias=0.9961560872637355,
+            ship_bias=0.92842502574076,
+            shipyard_bias=0.023518730196242135,
+            fort_bias=0.01790044687004286,
+            trade_guild_bias=0.07424809427942114,
+            fishing_dock_bias=0.06012764385269903,
+            fishing_boat_bias=0.7295136775954751,
+            guard_captain_bias=0.826379346751287,
+            fire_plans_bias=0.33226767407755087,
+            dry_dock_bias=0.47837664093274734,
+            admiralty_bias=0.7301085162980401,
+            admiral_bias=0.5600620266505761,
+            overtime_bias=0.3624648413070583,
+            repair_bias=0.336405243590705,
+            construction_idle_bias=0.9007981491962945,
         ),
         BotStrategy(
             name="Port Reaper",
