@@ -787,9 +787,27 @@ def render_training_dashboard(
             f"{delta_text(average(stats, 'guard_captain_ship_captures_total'), average(previous_stats, 'guard_captain_ship_captures_total') if previous_stats else None, precision=1)}"
         ),
         (
-            f"admiralty={average(stats, 'admiralty_completed'):.1f}/game  "
-            f"admirals={average(stats, 'admirals_total'):.1f}/game"
+            f"admty S/C={average(stats, 'admiralty_started'):.1f}/"
+            f"{average(stats, 'admiralty_completed'):.1f}  "
+            f"ever/burn={average(stats, 'admiralty_ever_completed'):.1f}/"
+            f"{average(stats, 'admiralty_burned'):.1f}  "
+            f"adm={average(stats, 'admirals_total'):.1f}/"
+            f"{average(stats, 'admiral_slots_total'):.1f} slots  "
+            f"open={average(stats, 'admiral_open_slots_total'):.1f}"
             f"{delta_text(average(stats, 'admirals_total'), average(previous_stats, 'admirals_total') if previous_stats else None, precision=1)}"
+        ),
+        (
+            f"dockhouse={average(stats, 'dockhouse_completed'):.1f}/game  "
+            f"hands={average(stats, 'dockhands_total'):.1f}/game  "
+            f"duty C/R/B={average(stats, 'dockhand_construction_duty'):.1f}/"
+            f"{average(stats, 'dockhand_repair_duty'):.1f}/"
+            f"{average(stats, 'dockhand_boatwright_duty'):.1f}"
+        ),
+        (
+            f"supply={average(stats, 'supply_total'):.1f}/game  "
+            f"crisis={average(stats, 'supply_crises'):.1f}/game  "
+            f"desert={average(stats, 'supply_desertions_total'):.1f}/game  "
+            f"burns={average(stats, 'supply_unrest_burns'):.1f}/game"
         ),
     ]
     strategy_lines = [
@@ -803,7 +821,7 @@ def render_training_dashboard(
         ),
         (
             f"infra   yard={strategy.shipyard_bias:.2f}  fort={strategy.fort_bias:.2f}  "
-            f"guild={strategy.trade_guild_bias:.2f}"
+            f"guild={strategy.trade_guild_bias:.2f}  admin={strategy.administrator_bias:.2f}"
         ),
         (
             f"        captain={strategy.guard_captain_bias:.2f}  "
@@ -811,7 +829,13 @@ def render_training_dashboard(
         ),
         (
             f"econ    fishing_dock={strategy.fishing_dock_bias:.2f}  "
-            f"boat={strategy.fishing_boat_bias:.2f}  dry_dock={strategy.dry_dock_bias:.2f}"
+            f"boat={strategy.fishing_boat_bias:.2f}  dockhouse={strategy.dockhouse_bias:.2f}"
+        ),
+        (
+            f"hands   hire={strategy.dockhand_bias:.2f}  "
+            f"repair={strategy.dockhand_repair_bias:.2f}  "
+            f"boatwright={strategy.dockhand_boatwright_bias:.2f}  "
+            f"dry_dock={strategy.dry_dock_bias:.2f}"
         ),
         (
             f"cmd     admiralty={strategy.admiralty_bias:.2f}  "
@@ -903,15 +927,29 @@ def dashboard_benchmark_lines(rows, weakest_count=None):
             "score_total",
             "opponent_score_total",
             "admiralty_completed",
+            "admiralty_ever_completed",
+            "admiralty_burned",
             "admirals_total",
+            "admiral_slots_total",
+            "admiral_open_slots_total",
+            "dockhouse_completed",
+            "dockhouse_burned",
+            "dockhands_total",
+            "dockhand_idle_turns",
+            "dockhand_discounted_repairs",
+            "dockhand_boatwright_boats",
+            "supply_total",
+            "supply_crises",
+            "supply_desertions_total",
+            "supply_unrest_burns",
         ]:
-            total[key] += row[key]
+            total[key] += row.get(key, 0)
 
     total_row = dict(total)
     total_row["opponent"] = "TOTAL"
     lines = [
-        "Opponent          Games  W-L-D          Win    Port W/L   Turns  Win/LossT  Assets/Opp  Admty/Adm",
-        "---------------  -----  -------------  ------  ---------  -----  ---------  ----------  ---------",
+        "Opponent          Games  W-L-D          Win    Port W/L   Turns  Win/LossT  Assets/Opp  Supply/C",
+        "---------------  -----  -------------  ------  ---------  -----  ---------  ----------  --------",
     ]
     for row in rows:
         lines.append(dashboard_benchmark_row(row))
@@ -929,8 +967,8 @@ def dashboard_benchmark_row(row, total=False):
     avg_opponent_score = row["opponent_score_total"] / games if games else 0
     port_loss_rate = row["port_losses"] / games if games else 0
     port_win_rate = row["port_wins"] / games if games else 0
-    admiralty_rate = row.get("admiralty_completed", 0) / games if games else 0
-    avg_admirals = row.get("admirals_total", 0) / games if games else 0
+    avg_supply = row.get("supply_total", 0) / games if games else 0
+    avg_crises = row.get("supply_crises", 0) / games if games else 0
 
     opponent = f"{row['opponent']:<15}"
     if total:
@@ -961,14 +999,16 @@ def dashboard_benchmark_row(row, total=False):
             "red" if avg_opponent_score > avg_score * 1.5 and games else None
         ),
     )
-    admiralty_pair = paint(
-        f"{admiralty_rate * 100:>3.0f}%/{avg_admirals:<3.1f}",
-        "cyan" if admiralty_rate >= 0.2 or avg_admirals >= 0.5 else None,
-        bold=admiralty_rate >= 0.5 or avg_admirals >= 1.5,
+    supply_pair = paint(
+        f"{avg_supply:>4.1f}/{avg_crises:<3.1f}",
+        "green" if avg_supply >= 2 and avg_crises < 1 else (
+            "red" if avg_supply < -1 or avg_crises >= 4 else None
+        ),
+        bold=avg_supply >= 4 or avg_supply <= -3,
     )
     row_text = (
         f"{opponent}  {games:>5}  {win_loss_draw}  "
         f"{win_rate_text}  {port_record}  {avg_turns:>5.1f}  "
-        f"{avg_turn_pair}  {asset_pair}  {admiralty_pair}"
+        f"{avg_turn_pair}  {asset_pair}  {supply_pair}"
     )
     return row_text

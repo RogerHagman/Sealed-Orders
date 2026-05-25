@@ -1,4 +1,6 @@
 import io
+import math
+import random
 import shutil
 import sys
 import termios
@@ -22,12 +24,14 @@ class Game:
         self.damaged_raider_cleanup = {}
         self.buy_phase_baselines = {}
         self.admiral_interventions = {}
+        self.supply_income = {}
 
     def play(self):
         UI.section(f"SEALED ORDERS v{Rules.VERSION}", "magenta")
         UI.bullet("Assign ships to Trade, Raid, Guard, and Fire.", "cyan")
         UI.bullet(f"Highest total assets after {Rules.MAX_TURNS} turns wins.", "yellow")
         UI.bullet("Treasure and payroll convoys create delayed, raidable payouts.")
+        UI.bullet("Sea income keeps fleets supplied; shortages create attrition.")
         UI.bullet("Unassigned ships become port workers for construction projects.")
         UI.bullet("Fire ships and guard captains are buy-phase upgrades.")
 
@@ -54,8 +58,9 @@ class Game:
         if self.game_over:
             return
         self.pause_after_resolution()
-        self.show_bulletin("Port Labor", self.apply_port_labor)
         self.show_bulletin("Convoy Arrivals", self.advance_convoys)
+        self.show_bulletin("Supply", self.apply_supply)
+        self.show_bulletin("Port Labor", self.apply_port_labor)
         self.buy_phase()
         after_snapshot = self.snapshot_turn()
         self.show_turn_summary(before_snapshot, after_snapshot, orders_snapshot)
@@ -72,7 +77,7 @@ class Game:
     def print_full_state(self):
         UI.subheading("Harbor State")
         self.print_player_panels(
-            [(player.name, player.status_lines()) for player in self.players]
+            [(player.name, self.player_status_lines(player)) for player in self.players]
         )
 
     def buy_baseline(self, player):
@@ -94,6 +99,12 @@ class Game:
             f"{UI.amount(player.ships, 'ships')}{UI.delta(ships_delta)}  "
             f"{UI.amount(player.asset_score, 'assets', 'yellow')}{UI.delta(asset_delta)}"
         )
+        lines[2] = f"Payroll: {self.player_payroll_status(player)}"
+        return lines
+
+    def player_status_lines(self, player):
+        lines = player.status_lines()
+        lines[2] = f"{UI.field('Payroll')} {self.player_payroll_status(player)}"
         return lines
 
     def print_player_panels(self, titled_lines):
@@ -185,9 +196,16 @@ class Game:
                 "burn",
                 "damaged",
                 "mutiny",
+                "desertion",
+                "unrest",
+                "crisis",
+                "forfeits",
+                "confiscates all fishing",
             ]
         ):
             return self.accent_bulletin_nations(UI.accent_amounts(line, "red"))
+        if "supply" in lower:
+            return self.accent_bulletin_nations(UI.accent_amounts(line, "yellow"))
         if "smuggle" in lower:
             return self.accent_bulletin_nations(UI.accent_amounts(line, "magenta"))
         if "confiscat" in lower or "guard captains catch" in lower:
@@ -261,7 +279,7 @@ class Game:
                 else player.allocation
             )
             fire_value = (
-                UI.amount(allocation.fire)
+                UI.order_amount("Fire", allocation.fire)
                 if player.fire_ships_unlocked or allocation.fire
                 else UI.muted("locked")
             )
@@ -269,8 +287,10 @@ class Game:
                 [
                     "",
                     UI.paint(player.name, "magenta", bold=True),
-                    f"  Trade {UI.amount(allocation.trade)}   Raid {UI.amount(allocation.raid)}",
-                    f"  Guard {UI.amount(allocation.guard)}   Fire {fire_value}",
+                    f"  {UI.order_label('Trade')} {UI.order_amount('Trade', allocation.trade)}   "
+                    f"{UI.order_label('Raid')} {UI.order_amount('Raid', allocation.raid)}",
+                    f"  {UI.order_label('Guard')} {UI.order_amount('Guard', allocation.guard)}   "
+                    f"{UI.order_label('Fire')} {fire_value}",
                 ]
             )
         lines.extend(["", UI.muted("Read the bulletin for the clash-by-clash result.")])
@@ -348,11 +368,14 @@ class Game:
             "ships": player.ships,
             "asset_score": player.asset_score,
             "treasure_status": f"{player.treasure_value} gold{player.treasure_status}",
-            "payroll_status": player.payroll_status,
+            "payroll_status": self.player_payroll_status(player),
             "shipyard_status": player.shipyard_status,
             "fort_status": player.fort_status,
             "trade_guild_status": player.trade_guild_status,
             "fishing_status": player.fishing_status,
+            "dockhouse_status": player.dockhouse_status,
+            "dockhand_status": player.dockhand_status,
+            "supply_status": player.supply_status,
             "raid_fatigue_status": player.raid_fatigue_status,
             "dry_dock_status": player.dry_dock_status,
             "admiralty_status": player.admiralty_status,
@@ -394,6 +417,9 @@ class Game:
                 "trade_guild_status",
             )
             self.add_status_change(lines, "Fishing", before, after, "fishing_status")
+            self.add_status_change(lines, "Dockhouse", before, after, "dockhouse_status")
+            self.add_status_change(lines, "Dock hands", before, after, "dockhand_status")
+            self.add_status_change(lines, "Supply", before, after, "supply_status")
             self.add_status_change(
                 lines, "Raid fatigue", before, after, "raid_fatigue_status"
             )
@@ -435,6 +461,37 @@ class Game:
             return month
         return f"{month}, Year {year}"
 
+    @property
+    def payroll_year(self):
+        return (self.turn - 1) // len(Rules.MONTHS)
+
+    @property
+    def payroll_cycle_turn(self):
+        return ((self.turn - 1) % len(Rules.MONTHS)) + 1
+
+    def payroll_launched_this_year(self, player):
+        return self.payroll_year in player.payroll_launch_years
+
+    def payroll_window_text(self):
+        start_month = Rules.MONTHS[Rules.PAYROLL_START_TURN - 1]
+        final_month = Rules.MONTHS[Rules.PAYROLL_FINAL_TURN - 1]
+        return f"{start_month}-{final_month}"
+
+    def player_payroll_status(self, player):
+        if player.has_payroll_at_sea:
+            return (
+                f"{player.payroll_value} gold at sea, arrives in "
+                f"{player.payroll_turns_remaining} turn(s)"
+            )
+        if self.payroll_launched_this_year(player):
+            return "completed this year"
+        if self.payroll_cycle_turn < Rules.PAYROLL_START_TURN:
+            return f"must launch between {self.payroll_window_text()}"
+        final_month = Rules.MONTHS[Rules.PAYROLL_FINAL_TURN - 1]
+        if self.payroll_cycle_turn >= Rules.PAYROLL_FINAL_TURN:
+            return "launches automatically this month"
+        return f"must launch by {final_month}"
+
     def show_player_economy(self, player):
         self.render_play_area(
             phase=f"{player.name}'s Command",
@@ -449,6 +506,24 @@ class Game:
         )
 
     def player_economy_lines(self, player):
+        opponent = self.opponent_for(player)
+        smuggle_bonus = 0
+        if opponent is not None and opponent.supply <= -1:
+            smuggle_bonus = max(0, Rules.TRADE_INCOME - Rules.SMUGGLE_INCOME)
+        smuggle_income_text = UI.amount(Rules.SMUGGLE_INCOME)
+        if smuggle_bonus:
+            smuggle_income_text += f" {UI.paint(f'+{smuggle_bonus}', 'magenta', bold=True)}"
+        smuggle_income_text += " gold"
+        trade_bonus = 1 if player.supply >= 5 else 0
+        trade_income_text = UI.amount(Rules.TRADE_INCOME)
+        if trade_bonus:
+            trade_income_text += f" {UI.paint(f'+{trade_bonus}', 'green', bold=True)}"
+        trade_income_text += " gold"
+        guild_note = ""
+        if player.trade_guild_completed:
+            guild_note = ", guild bonus x2" if player.supply >= 4 else ", guild bonus active"
+        elif player.supply >= 4:
+            guild_note = ", needs guild for +5"
         lines = []
         if self.buy_baseline(player) is not None:
             lines.append(self.purchase_summary_line(player))
@@ -458,25 +533,33 @@ class Game:
                 f"(shipyard value: {player.shipyard_value}, "
                 f"fort value: {player.fort_value}, "
                 f"trade guild value: {player.trade_guild_value}, "
+                f"dockhouse value: {player.dockhouse_value}, "
                 f"dry dock value: {player.dry_dock_value}, "
                 f"admiralty value: {player.admiralty_value})",
-                f"  {UI.field('Economy')} Trade income: {UI.amount(Rules.TRADE_INCOME, 'gold')}, "
-                f"smuggle income: {UI.amount(Rules.SMUGGLE_INCOME, 'gold')}, "
-                f"fishing boat income: {UI.amount(Rules.FISHING_BOAT_INCOME, 'gold')}",
+                f"  {UI.field('Economy')} Trade income: {trade_income_text}, "
+                f"smuggle income: {smuggle_income_text}, "
+                f"fishing boat income: {UI.amount(Rules.FISHING_BOAT_INCOME, 'gold')}"
+                f"{guild_note}",
+                f"  {UI.field('Supply cover')} War chest: "
+                f"{player.supply_warchest_markup} gold per missing supply",
                 f"  {UI.field('Ships')} {UI.amount(player.ships)}{UI.delta(self.buy_delta(player, 'ships'))}; cost: {UI.amount(player.ship_cost, 'gold')}, "
                 f"ship value: {UI.amount(Rules.SHIP_COST, 'gold')}",
                 f"  {UI.field('Fishing')} Docks: {UI.amount(Rules.FISHING_DOCK_COST, 'gold')}, "
                 f"{UI.amount(Rules.FISHING_DOCK_LABOR_REQUIRED, 'labor')}; "
                 f"boats: {UI.amount(Rules.FISHING_BOAT_COST, 'gold')} each",
+                f"  {UI.field('Dockhouse')} {player.dockhouse_status}",
+                f"  {UI.field('Dock hands')} {player.dockhand_status}",
             ]
         )
-        if not player.payroll_launched:
+        if not self.payroll_launched_this_year(player):
             lines.append(
                 f"  {UI.field('Payroll cost')} {UI.amount(player.payroll_cost, 'gold')}"
             )
         lines.extend(
             [
-                f"  {UI.field('Treasure')} {player.treasure_value} gold{player.treasure_status}",
+                f"  {UI.field('Treasure')} {player.treasure_value} gold{player.treasure_status}; "
+                f"{player.treasure_growth_ticker}",
+                f"  {UI.field('Supply')} {player.supply_status}",
                 f"  {UI.field('Raid fatigue')} {player.raid_fatigue_status}",
                 f"  {UI.field('Port defences')} {player.port_defense_status}",
                 f"  {UI.field('Dry dock')} {player.dry_dock_status}",
@@ -487,6 +570,12 @@ class Game:
         )
         lines.extend(self.harbor_upgrade_art_lines(player))
         return lines
+
+    def opponent_for(self, player):
+        for candidate in self.players:
+            if candidate is not player:
+                return candidate
+        return None
 
     def harbor_upgrade_art_lines(self, player):
         def style(text, active=False, started=False, destroyed=False, color="green"):
@@ -506,12 +595,22 @@ class Game:
             "green",
         )
         fort = style("Fort /###\\", player.fort_completed, player.fort_started, False, "yellow")
+        guild_text = "Guild [$]"
+        if player.administrator_hired:
+            guild_text = "Guild [$]+[A]"
         guild = style(
-            "Guild [$]",
+            guild_text,
             player.trade_guild_completed,
             player.trade_guild_started,
             False,
             "green",
+        )
+        dockhouse = style(
+            "Hands [##]",
+            player.dockhouse_completed,
+            player.dockhouse_started,
+            player.dockhouse_burned,
+            "yellow",
         )
         fishing = style(
             "Docks ~|_|~",
@@ -551,13 +650,34 @@ class Game:
         return [
             "",
             UI.field("Harbor works"),
+            self.supply_effect_art_line(player),
             f"  {yard}    {fort}    {guild}",
-            f"  {fishing}    {dry_dock}    {admiralty}",
+            f"  {fishing}    {dockhouse}    {dry_dock}    {admiralty}",
             f"  {fire}",
+            f"  Hands {self.dockhand_art(player)}",
             f"  Capt {captain_marks}",
             f"  Adm  {admiral_marks}",
             f"  {self.convoy_art_line(player)}",
         ]
+
+    def dockhand_art(self, player):
+        marks = []
+        for index in range(Rules.DOCKHAND_MAX):
+            mark = "[]"
+            if index < player.dockhands:
+                color = "yellow" if player.dockhouse_completed else "red"
+                marks.append(UI.paint(mark, color, bold=True))
+            else:
+                marks.append(UI.muted(mark))
+        return " ".join(marks)
+
+    def supply_effect_art_line(self, player):
+        if not player.last_supply_events:
+            return f"  Supply {UI.muted('no recent effects')}"
+        return (
+            f"  Supply "
+            f"{player.supply_event_summary}"
+        )
 
     def convoy_art_line(self, player):
         treasure = f"T{UI.amount(player.treasure_value)}"
@@ -568,12 +688,12 @@ class Game:
 
         if player.has_payroll_at_sea:
             payroll = UI.paint(f"Payroll -> {player.payroll_turns_remaining}", "yellow", bold=True)
-        elif player.payroll_launched:
+        elif self.payroll_launched_this_year(player):
             payroll = UI.paint("Payroll done", "green", bold=True)
-        elif self.turn < Rules.PAYROLL_START_TURN:
+        elif self.payroll_cycle_turn < Rules.PAYROLL_START_TURN:
             payroll = UI.muted("Payroll locked")
-        elif self.turn > Rules.PAYROLL_FINAL_TURN:
-            payroll = UI.paint("Payroll overdue", "red", bold=True)
+        elif self.payroll_cycle_turn >= Rules.PAYROLL_FINAL_TURN:
+            payroll = UI.paint("Payroll auto", "yellow", bold=True)
         else:
             payroll = UI.paint("Payroll ready", "cyan", bold=True)
 
@@ -695,10 +815,10 @@ class Game:
                 phase=f"{player.name}'s Orders",
                 control_lines=[
                     f"Assign up to {UI.amount(player.ships, 'ships')}.",
-                    "Trade: earn gold.",
-                    "Raid: steal trade, pressure ports.",
-                    "Guard: protect lanes and catch smugglers.",
-                    "Fire: burn guards and infrastructure when unlocked.",
+                    f"{UI.order_label('Trade')}: earn gold.",
+                    f"{UI.order_label('Raid')}: steal trade, pressure ports.",
+                    f"{UI.order_label('Guard')}: protect lanes and catch smugglers.",
+                    f"{UI.order_label('Fire')}: burn guards and infrastructure when unlocked.",
                 "Unassigned ships become port workers for construction projects.",
                 ],
                 info_lines=self.player_economy_lines(player),
@@ -706,14 +826,14 @@ class Game:
                 clear=True,
                 include_state=True,
             )
-            trade = self.prompt_non_negative_int("Trade ships: ")
-            raid = self.prompt_non_negative_int("Raid ships: ")
-            guard = self.prompt_non_negative_int("Guard ships: ")
+            trade = self.prompt_non_negative_int(f"{UI.order_label('Trade')} ships: ")
+            raid = self.prompt_non_negative_int(f"{UI.order_label('Raid')} ships: ")
+            guard = self.prompt_non_negative_int(f"{UI.order_label('Guard')} ships: ")
             fire = 0
             if player.fire_ships_unlocked:
-                fire = self.prompt_non_negative_int("Fire ships: ")
+                fire = self.prompt_non_negative_int(f"{UI.order_label('Fire')} ships: ")
             else:
-                print("Fire ships: locked")
+                print(f"{UI.order_label('Fire')} ships: locked")
             allocation = Allocation(trade, raid, guard, fire)
 
             if allocation.total <= player.ships:
@@ -820,10 +940,12 @@ class Game:
             ]
             for index, field in enumerate(fields):
                 marker = UI.paint(">", "green", bold=True) if index == selected else " "
-                value = UI.amount(values[field])
-                control_lines.append(f"{marker} {field:<6} {value}")
+                value = UI.order_amount(field, values[field])
+                control_lines.append(f"{marker} {UI.order_label(field, 6)} {value}")
             if not player.fire_ships_unlocked:
-                control_lines.append(UI.muted("  Fire   locked"))
+                control_lines.append(
+                    f"  {UI.order_label('Fire', 6)} {UI.muted('locked')}"
+                )
             control_lines.append(
                 f"  {'Port':<6} {UI.amount(port_workers)} {UI.muted('(automatic)')}"
             )
@@ -932,7 +1054,7 @@ class Game:
         )
 
     def pause_after_resolution(self):
-        input("\nPress Enter to continue to port labor, convoy arrivals, and buy phase...")
+        input("\nPress Enter to continue to convoys, supply, port labor, and buy phase...")
         print()
 
     def resolve_orders(self):
@@ -945,6 +1067,15 @@ class Game:
 
         self.port_labor = {
             player: max(0, player.ships - player.allocation.total)
+            for player in self.players
+        }
+        self.supply_income = {
+            player: {
+                "trade": 0,
+                "stolen": 0,
+                "treasure": 0,
+                "fishing": 0,
+            }
             for player in self.players
         }
         for player in self.players:
@@ -983,6 +1114,12 @@ class Game:
 
         player_one.gold += player_one_income
         player_two.gold += player_two_income
+        self.supply_income[player_one]["trade"] += result_one.supply_trade_income
+        self.supply_income[player_one]["stolen"] += result_two.supply_stolen_income
+        self.supply_income[player_one]["fishing"] += result_one.supply_fishing_income
+        self.supply_income[player_two]["trade"] += result_two.supply_trade_income
+        self.supply_income[player_two]["stolen"] += result_one.supply_stolen_income
+        self.supply_income[player_two]["fishing"] += result_two.supply_fishing_income
 
         print(
             f"\n{player_one.name} earns {player_one_income} gold total "
@@ -1420,6 +1557,8 @@ class Game:
         return max(0, self.port_labor.get(defender, 0))
 
     def resolve_income(self, trader, opponent):
+        trader.last_treasure_growth = 0
+        trader.last_treasure_growth_boost = 0
         remaining_trade = trader.allocation.trade
         starting_trade = remaining_trade
         active_raids = opponent.allocation.raid
@@ -1489,14 +1628,33 @@ class Game:
         paid_smuggled_trade = (
             smuggled_trade - confiscated_trade - captured_smuggling_ships
         )
-        smuggle_income = paid_smuggled_trade * Rules.SMUGGLE_INCOME
-        confiscated_income = confiscated_trade * Rules.SMUGGLE_INCOME
+        smuggle_rate = Rules.TRADE_INCOME if opponent.supply <= -1 else Rules.SMUGGLE_INCOME
+        smuggle_income = paid_smuggled_trade * smuggle_rate
+        smuggle_boost_income = max(
+            0,
+            smuggle_income - paid_smuggled_trade * Rules.SMUGGLE_INCOME,
+        )
+        confiscated_income = confiscated_trade * smuggle_rate
 
         normal_income = remaining_trade * Rules.TRADE_INCOME
         trade_bonus = self.calculate_trade_guild_bonus(trader, remaining_trade)
+        base_trade_bonus = 0
+        if trader.trade_guild_completed and remaining_trade > 0:
+            base_trade_bonus = max(1, remaining_trade // Rules.TRADE_GUILD_BONUS_STEP)
+        guild_boost_income = max(0, trade_bonus - base_trade_bonus)
+        supply_trade_bonus = 0
+        if trader.supply >= 5 and remaining_trade > 0:
+            supply_trade_bonus = remaining_trade
         fishing_income = trader.fishing_income
-        trade_income = smuggle_income + normal_income + trade_bonus
+        trade_income = smuggle_income + normal_income + trade_bonus + supply_trade_bonus
+        boosted_income = smuggle_boost_income + guild_boost_income + supply_trade_bonus
+        unboosted_trade_income = max(0, trade_income - boosted_income)
         treasure_growth = int(trade_income * Rules.TREASURE_TRADE_PERCENT)
+        treasure_growth_boost = max(
+            0,
+            treasure_growth
+            - int(unboosted_trade_income * Rules.TREASURE_TRADE_PERCENT),
+        )
 
         if starting_trade <= 0:
             print(" - No trade ships sail this turn.")
@@ -1513,6 +1671,11 @@ class Game:
                 f" - {smuggled_trade} trade ship(s) smuggle past guards for "
                 f"{smuggle_income} gold."
             )
+            if opponent.supply <= -1 and paid_smuggled_trade:
+                print(
+                    f" - {opponent.name}'s supply strain opens the lanes; "
+                    "smugglers earn full trade income."
+                )
         if confiscated_income:
             print(
                 f" - Guard captains catch {confiscated_trade} smuggler(s); "
@@ -1530,6 +1693,11 @@ class Game:
             )
         if trade_bonus:
             print(f" - Trade guild bonus adds {trade_bonus} gold.")
+        if supply_trade_bonus:
+            print(
+                f" - Full supply reserves add {supply_trade_bonus} gold "
+                "to completed trade."
+            )
         if fishing_income:
             print(
                 f" - Fishing boats bring in {fishing_income} domestic gold."
@@ -1539,6 +1707,8 @@ class Game:
 
         if treasure_growth and not trader.has_treasure_at_sea:
             trader.treasure_value += treasure_growth
+            trader.last_treasure_growth = treasure_growth
+            trader.last_treasure_growth_boost = treasure_growth_boost
             print(f" - Treasure route grows by {treasure_growth} gold.")
         elif treasure_growth:
             print(" - Treasure route does not grow while its convoy is at sea.")
@@ -1550,6 +1720,9 @@ class Game:
             confiscated_income=confiscated_income,
             captured_smuggling_ships=captured_smuggling_ships,
             treasure_growth=treasure_growth,
+            supply_trade_income=trade_income,
+            supply_stolen_income=stolen_income,
+            supply_fishing_income=fishing_income,
         )
 
     def apply_fort_raid_blocks(self, trader, active_raids):
@@ -1567,14 +1740,386 @@ class Game:
         if not trader.trade_guild_completed or completed_trade <= 0:
             return 0
 
-        return max(1, completed_trade // Rules.TRADE_GUILD_BONUS_STEP)
+        bonus = max(1, completed_trade // Rules.TRADE_GUILD_BONUS_STEP)
+        if trader.supply >= 4:
+            bonus *= 2
+        return bonus
+
+    def apply_supply(self):
+        UI.section("SUPPLY", "yellow")
+        for player in self.players:
+            ledger = self.supply_income.get(player, {})
+            trade = ledger.get("trade", 0)
+            stolen = ledger.get("stolen", 0)
+            treasure = ledger.get("treasure", 0)
+            fishing = ledger.get("fishing", 0)
+            counted_fishing = fishing // 2
+            counted_income = trade + stolen + treasure + counted_fishing
+            need = player.supply_need
+            warchest_supply, warchest_cost = self.apply_supply_warchest(
+                player,
+                need,
+                counted_income,
+            )
+            effective_counted_income = counted_income + warchest_supply
+            change = self.calculate_supply_change(
+                player.supply,
+                need,
+                effective_counted_income,
+            )
+            change = self.cap_supply_change_for_turn(change)
+            previous_supply = player.supply
+            if previous_supply >= 0 and change < 0:
+                change = -1
+            player.supply = self.clamp_supply(player, player.supply + change)
+            warchest_text = ""
+            if warchest_supply:
+                warchest_text = (
+                    f", {warchest_supply} war chest for {warchest_cost} gold"
+                )
+            print(
+                f"{player.name} supply: need {need}, covered by {effective_counted_income} "
+                f"({trade} trade, {stolen} stolen, {treasure} treasure, "
+                f"{counted_fishing} fishing credit{warchest_text}); "
+                f"{previous_supply:+d} -> {player.supply:+d}."
+            )
+            missed_need = effective_counted_income < need
+            events = self.apply_supply_effects(player, previous_supply, missed_need)
+            player.last_supply_events = events[:]
+            self.print_supply_queue(player, previous_supply, player.supply, events)
+
+    def apply_supply_warchest(self, player, need, counted_income):
+        if need <= 0 or counted_income >= need:
+            return 0, 0
+        shortfall = need - counted_income
+        markup = player.supply_warchest_markup
+        covered = min(shortfall, max(0, player.gold) // markup)
+        if covered <= 0:
+            return 0, 0
+        cost = covered * markup
+        player.gold -= cost
+        return covered, cost
+
+    def clamp_supply(self, player, supply):
+        maximum = Rules.SUPPLY_MAX if player.trade_guild_completed else 4
+        return max(Rules.SUPPLY_MIN, min(maximum, supply))
+
+    def calculate_supply_change(self, current_supply, need, counted_income):
+        if need <= 0:
+            return 1 if current_supply < 0 else 0
+        if counted_income < need:
+            if current_supply < -1:
+                return -1
+            if current_supply < 0:
+                return -1
+            if counted_income * 5 <= need:
+                return -2
+            return -1
+        if current_supply >= 3:
+            return 1 if counted_income >= need * 5 else 0
+        if current_supply >= 2:
+            return 1 if counted_income >= need * 5 else 0
+        if current_supply >= 0:
+            if counted_income >= need * 5:
+                return 2
+            if counted_income >= need * 2:
+                return 1
+            return 0
+        if counted_income >= need * 5:
+            return 3
+        if counted_income >= need * 2:
+            return 2
+        return -1
+
+    def cap_supply_change_for_turn(self, change):
+        if self.turn <= 3:
+            cap = 1
+        elif self.turn <= 8:
+            cap = 2
+        else:
+            cap = 3
+        return max(-cap, min(cap, change))
+
+    def apply_supply_effects(self, player, previous_supply, missed_need):
+        if player.supply >= 4:
+            events = []
+            if player.trade_guild_completed:
+                events.append("Guild x2")
+                print(
+                    f" - {player.name}'s stocked warehouses energize trade "
+                    "guild routes."
+                )
+            if player.supply >= 5:
+                events.append("Trade +1")
+                print(
+                    f" - {player.name}'s full reserves add 1 gold to each "
+                    "completed trade ship."
+                )
+            return events
+        if player.supply >= 0:
+            return []
+
+        events = ["Smg+"]
+        print(
+            f" - {player.name}'s supply strain helps enemy smugglers earn "
+            "full trade income."
+        )
+        if not missed_need:
+            print(
+                f" - {player.name}'s supply strain stabilizes this month; "
+                "no crisis effect triggers."
+            )
+            return events
+
+        player.supply_crises += 1
+        if previous_supply >= 0:
+            print(
+                f" - {player.name} has slipped into shortage, but no attrition "
+                "hits yet."
+            )
+            return events
+        if player.supply == -2:
+            event = self.apply_supply_light_damage(player)
+            if event:
+                events.append(event)
+        elif player.supply == -3:
+            losses = self.apply_supply_desertion(player, Rules.SUPPLY_DESERTION_PERCENT)
+            if losses:
+                events.append(f"Ship -{losses}")
+            elif self.admirals_fully_administer_fleet(player):
+                events.append("Adm -desert")
+            elif player.ships <= 0:
+                events.append("No ships")
+            event = self.apply_supply_fishing_loss(player, dock_absorbs=True)
+            if event:
+                events.append(event)
+        elif player.supply == -4:
+            burn = self.burn_supply_infrastructure(
+                player,
+                captains_can_quell=True,
+            )
+            if burn:
+                if burn in {"unrest quelled", "captains quelled"}:
+                    events.append(self.supply_token(burn))
+                else:
+                    events.append(f"Burn:{self.supply_token(burn)}")
+            else:
+                losses = self.apply_supply_desertion(
+                    player,
+                    Rules.SUPPLY_HEAVY_DESERTION_PERCENT,
+                )
+                if losses:
+                    events.append(f"Ship -{losses}")
+                elif self.admirals_fully_administer_fleet(player):
+                    events.append("Adm -desert")
+                elif player.ships <= 0:
+                    events.append("No ships")
+        elif player.supply <= -5:
+            event = self.apply_supply_fishing_loss(player, confiscated=True)
+            if event:
+                events.append(event)
+            burn = self.burn_supply_infrastructure(
+                player,
+                cheapest=player.guard_captains >= Rules.GUARD_CAPTAIN_MAX,
+            )
+            if burn:
+                if burn in {"unrest quelled", "captains quelled"}:
+                    events.append(self.supply_token(burn))
+                else:
+                    events.append(f"Burn:{self.supply_token(burn)}")
+            losses = self.apply_supply_desertion(player, Rules.SUPPLY_HEAVY_DESERTION_PERCENT)
+            if losses:
+                events.append(f"Ship -{losses}")
+            elif self.admirals_fully_administer_fleet(player):
+                events.append("Adm -desert")
+            elif player.ships <= 0:
+                events.append("No ships")
+        return events
+
+    def print_supply_queue(self, player, previous_supply, current_supply, events):
+        event_text = (
+            ", ".join(player.format_supply_event(event) for event in events)
+            if events
+            else "no attrition"
+        )
+        color = "green" if current_supply > previous_supply else (
+            "red" if current_supply < previous_supply else "yellow"
+        )
+        print(
+            " > "
+            f"{player.name} supply queue: "
+            f"{UI.paint(f'{previous_supply:+d}->{current_supply:+d}', color, bold=True)}; "
+            f"{event_text}."
+        )
+
+    def apply_supply_light_damage(self, player):
+        if player.ships > 0:
+            damaged = min(
+                player.ships - player.damaged_ships,
+                max(1, math.ceil(player.ships * Rules.SUPPLY_LIGHT_DAMAGE_PERCENT)),
+            )
+            if damaged > 0:
+                player.damaged_ships += damaged
+                player.raid_damage_events += damaged
+                print(
+                    f" - Short rations damage {damaged} ship(s) in "
+                    f"{player.name}'s fleet."
+                )
+                return f"Dmg +{damaged}"
+        return self.apply_supply_fishing_loss(player)
+
+    def apply_supply_desertion(self, player, percent):
+        if player.ships <= 0:
+            return 0
+        percent = self.admiralty_desertion_percent(player, percent)
+        if percent <= 0:
+            print(
+                f" - {player.name}'s Admiralty staff prevents supply desertion."
+            )
+            return 0
+        losses = player.remove_ships_for_supply(max(1, math.ceil(player.ships * percent)))
+        if losses:
+            print(
+                f" - Supply desertion costs {player.name} {losses} ship(s)."
+            )
+        return losses
+
+    def admiralty_desertion_percent(self, player, percent):
+        if not self.admirals_fully_administer_fleet(player):
+            return percent
+        if percent <= Rules.SUPPLY_DESERTION_PERCENT:
+            return 0
+        if percent >= Rules.SUPPLY_HEAVY_DESERTION_PERCENT:
+            return Rules.SUPPLY_DESERTION_PERCENT
+        return percent
+
+    def admirals_fully_administer_fleet(self, player):
+        return (
+            player.admiralty_completed
+            and player.admiral_slots > 0
+            and player.admirals >= player.admiral_slots
+        )
+
+    def apply_supply_fishing_loss(self, player, dock_absorbs=False, confiscated=False):
+        if not player.fishing_boats:
+            return None
+        if dock_absorbs and player.fishing_dock_built and not player.fishing_dock_disabled:
+            lost_income = player.fishing_income
+            player.disable_fishing_dock()
+            player.gold -= lost_income
+            player.supply_fishing_losses += lost_income
+            print(
+                f" - Fishing docks absorb unrest; {player.name} loses "
+                f"{lost_income} fishing income until repairs."
+            )
+            return f"Fish -{lost_income} Dock!"
+        lost_income = player.fishing_income if confiscated else player.fishing_income // 2
+        if lost_income <= 0:
+            return None
+        player.gold -= lost_income
+        player.supply_fishing_losses += lost_income
+        if confiscated:
+            print(
+                f" - Crisis confiscates all fishing income from {player.name} "
+                f"({lost_income} gold)."
+            )
+            return f"Fish -{lost_income}"
+        else:
+            print(
+                f" - Supply disruption forfeits half of {player.name}'s "
+                f"fishing income ({lost_income} gold)."
+            )
+            return f"Fish -{lost_income}"
+
+    def supply_burn_candidates(self, player):
+        candidates = []
+        if player.shipyard_completed:
+            candidates.append(("shipyard", Rules.SHIPYARD_COST + Rules.SHIPYARD_LABOR_REQUIRED))
+        if player.fort_completed:
+            candidates.append(("fort", Rules.FORT_COST + Rules.FORT_LABOR_REQUIRED))
+        if player.trade_guild_completed:
+            candidates.append(("trade guild", Rules.TRADE_GUILD_COST + Rules.TRADE_GUILD_LABOR_REQUIRED))
+        if player.fishing_dock_built and not player.fishing_dock_disabled:
+            candidates.append(("fishing docks", Rules.FISHING_DOCK_COST + Rules.FISHING_DOCK_LABOR_REQUIRED))
+        if player.dockhouse_completed:
+            candidates.append(("dockhouse", Rules.DOCKHOUSE_COST + Rules.DOCKHOUSE_LABOR_REQUIRED))
+        if player.dry_dock_completed:
+            candidates.append(("dry dock", Rules.DRY_DOCK_COST + Rules.DRY_DOCK_LABOR_REQUIRED))
+        if player.fire_ships_unlocked:
+            candidates.append(("fire ship plans", Rules.FIRE_SHIP_UPGRADE_COST))
+        if player.admiralty_completed:
+            candidates.append(("admiralty", Rules.ADMIRALTY_COST + Rules.ADMIRALTY_LABOR_REQUIRED))
+        return candidates
+
+    def burn_supply_infrastructure(self, player, cheapest=False, captains_can_quell=False):
+        candidates = self.supply_burn_candidates(player)
+        if not candidates:
+            return False
+        if captains_can_quell and player.guard_captains >= Rules.GUARD_CAPTAIN_MAX:
+            print(
+                f" - {player.name}'s full guard-captain roster contains the unrest "
+                "before infrastructure burns."
+            )
+            return "captains quelled"
+        if self.admiralty_quells_unrest(player):
+            return "unrest quelled"
+        if cheapest:
+            target = min(candidates, key=lambda candidate: candidate[1])[0]
+        else:
+            weights = [1 / cost for _, cost in candidates]
+            target = random.choices(candidates, weights=weights, k=1)[0][0]
+        if target == "shipyard":
+            player.burn_shipyard()
+        elif target == "fort":
+            player.burn_fort()
+        elif target == "trade guild":
+            player.burn_trade_guild()
+        elif target == "fishing docks":
+            player.burn_fishing_dock()
+        elif target == "dockhouse":
+            player.burn_dockhouse()
+        elif target == "dry dock":
+            player.burn_dry_dock()
+        elif target == "fire ship plans":
+            player.burn_fire_plans()
+        elif target == "admiralty":
+            player.burn_admiralty()
+        player.supply_unrest_burns += 1
+        print(f" - Civil unrest burns {player.name}'s {target}.")
+        return target
+
+    def admiralty_quells_unrest(self, player):
+        if not player.admiralty_completed or player.admiralty_unrest_response_used:
+            return False
+        player.admiralty_unrest_response_used = True
+        print(
+            f" - {player.name}'s Admiralty restores order before unrest can "
+            "burn infrastructure."
+        )
+        return True
+
+    def supply_token(self, target):
+        return {
+            "shipyard": "Yard",
+            "fort": "Fort",
+            "trade guild": "Guild",
+            "fishing docks": "Dock",
+            "dockhouse": "Hand",
+            "dry dock": "Dry",
+            "fire ship plans": "Fire",
+            "admiralty": "Adm",
+            "unrest quelled": "Adm!",
+            "captains quelled": "Capt!",
+        }.get(target, target)
 
     def apply_port_labor(self):
         UI.section("PORT LABOR", "blue")
         any_labor = False
 
         for player in self.players:
-            port_labor = self.port_labor.get(player, 0)
+            if player.dockhands and not player.dockhouse_completed:
+                player.dockhand_idle_turns += 1
+            port_labor = self.port_labor.get(player, 0) + player.dockhand_construction_labor
             shipyard_labor = player.add_shipyard_labor(port_labor)
             port_labor -= shipyard_labor
             fort_labor = player.add_fort_labor(port_labor)
@@ -1583,9 +2128,12 @@ class Game:
             port_labor -= trade_guild_labor
             fishing_dock_labor = player.add_fishing_dock_labor(port_labor)
             port_labor -= fishing_dock_labor
+            dockhouse_labor = player.add_dockhouse_labor(port_labor)
+            port_labor -= dockhouse_labor
             dry_dock_labor = player.add_dry_dock_labor(port_labor)
             port_labor -= dry_dock_labor
             admiralty_labor = player.add_admiralty_labor(port_labor)
+            boatwright_boats = player.apply_dockhand_boatwright()
 
             if shipyard_labor:
                 any_labor = True
@@ -1631,6 +2179,19 @@ class Game:
                         "Fishing boats can now be bought."
                     )
 
+            if dockhouse_labor:
+                any_labor = True
+                print(
+                    f"{player.name} applies {dockhouse_labor} labor to the "
+                    f"dockhouse ({player.dockhouse_labor}/"
+                    f"{Rules.DOCKHOUSE_LABOR_REQUIRED})."
+                )
+                if player.dockhouse_completed:
+                    print(
+                        f"{player.name}'s dockhouse is complete. "
+                        "Dock hands can now be hired."
+                    )
+
             if dry_dock_labor:
                 any_labor = True
                 print(
@@ -1643,6 +2204,14 @@ class Game:
                         f"{player.name}'s dry dock is complete. "
                         "Damaged raiders repair for free."
                     )
+
+            if boatwright_boats:
+                any_labor = True
+                print(
+                    f"{player.name}'s dock hands build {boatwright_boats} "
+                    f"fishing boat(s) for "
+                    f"{boatwright_boats * Rules.DOCKHAND_BOATWRIGHT_COST} gold."
+                )
 
             if admiralty_labor:
                 any_labor = True
@@ -1678,6 +2247,13 @@ class Game:
                 print(f"{player.name} has no port workers to work on the fishing docks.")
 
             if (
+                not dockhouse_labor
+                and player.dockhouse_started
+                and not player.dockhouse_completed
+            ):
+                print(f"{player.name} has no port workers to work on the dockhouse.")
+
+            if (
                 not dry_dock_labor
                 and player.dry_dock_started
                 and not player.dry_dock_completed
@@ -1704,6 +2280,8 @@ class Game:
                 player.treasure_turns_remaining -= 1
                 if player.treasure_turns_remaining == 0:
                     payout = player.complete_treasure()
+                    self.supply_income.setdefault(player, {}).setdefault("treasure", 0)
+                    self.supply_income[player]["treasure"] += payout
                     print(f"{player.name}'s treasure convoy arrives for {payout} gold.")
                 else:
                     print(
@@ -1732,6 +2310,7 @@ class Game:
     def buy_phase(self):
         self.buy_phase_baselines = {}
         for player in self.players:
+            player.refresh_dockhand_repair_discount()
             self.buy_phase_baselines[player] = self.snapshot_player(player)
             self.run_buy_menu(player)
 
@@ -1886,66 +2465,90 @@ class Game:
             ),
             (
                 "5",
+                "Hire administrator",
+                self.hire_administrator_action,
+                self.administrator_disabled_reason(player),
+            ),
+            (
+                "6",
                 "Build/repair fishing docks",
                 self.fishing_dock_action,
                 self.fishing_dock_disabled_reason(player),
             ),
             (
-                "6",
+                "7",
+                "Start dockhouse",
+                self.start_dockhouse_action,
+                self.dockhouse_disabled_reason(player),
+            ),
+            (
+                "8",
+                "Hire dock hand",
+                self.hire_dockhand_action,
+                self.dockhand_disabled_reason(player),
+            ),
+            (
+                "9",
+                "Assign dock hands",
+                self.assign_dockhands_action,
+                self.assign_dockhands_disabled_reason(player),
+            ),
+            (
+                "10",
                 "Buy fishing boats",
                 self.buy_fishing_boats_action,
                 self.buy_fishing_boats_disabled_reason(player),
             ),
             (
-                "7",
+                "11",
                 "Hire guard captain",
                 self.hire_guard_captain_action,
                 self.guard_captain_disabled_reason(player),
             ),
             (
-                "8",
+                "12",
                 "Buy fire ship plans",
                 self.buy_fire_ship_plans_action,
                 self.fire_ship_plans_disabled_reason(player),
             ),
             (
-                "9",
+                "13",
                 "Repair damaged ships",
                 self.repair_damaged_ships_action,
                 self.repair_damaged_ships_disabled_reason(player),
             ),
             (
-                "10",
+                "14",
                 "Start dry dock",
                 self.start_dry_dock_action,
                 self.dry_dock_disabled_reason(player),
             ),
             (
-                "11",
+                "15",
                 "Start admiralty",
                 self.start_admiralty_action,
                 self.admiralty_disabled_reason(player),
             ),
             (
-                "12",
+                "16",
                 "Recruit admiral",
                 self.recruit_admiral_action,
                 self.admiral_disabled_reason(player),
             ),
             (
-                "13",
+                "17",
                 "Admiralty overtime",
                 self.admiralty_overtime_action,
                 self.admiralty_overtime_disabled_reason(player),
             ),
             (
-                "14",
+                "18",
                 "Launch treasure convoy",
                 self.launch_treasure_action,
                 self.treasure_launch_disabled_reason(player),
             ),
             (
-                "15",
+                "19",
                 "Launch payroll convoy",
                 self.launch_payroll_action,
                 self.payroll_launch_disabled_reason(player),
@@ -1984,6 +2587,15 @@ class Game:
             return f"needs {Rules.TRADE_GUILD_COST} gold"
         return None
 
+    def administrator_disabled_reason(self, player):
+        if not player.trade_guild_completed:
+            return "needs completed trade guild"
+        if player.administrator_hired:
+            return "already hired"
+        if player.gold < Rules.ADMINISTRATOR_COST:
+            return f"needs {Rules.ADMINISTRATOR_COST} gold"
+        return None
+
     def fire_ship_plans_disabled_reason(self, player):
         if player.fire_ships_unlocked:
             return "already unlocked"
@@ -2016,10 +2628,35 @@ class Game:
             return f"needs {Rules.FISHING_BOAT_COST} gold"
         return None
 
+    def dockhouse_disabled_reason(self, player):
+        if player.dockhouse_completed:
+            return "already completed"
+        if player.dockhouse_started:
+            return "already started"
+        if player.gold < Rules.DOCKHOUSE_COST:
+            return f"needs {Rules.DOCKHOUSE_COST} gold"
+        return None
+
+    def dockhand_disabled_reason(self, player):
+        if not player.dockhouse_completed:
+            return "needs completed dockhouse"
+        if player.dockhands >= Rules.DOCKHAND_MAX:
+            return "maximum hired"
+        if player.gold < Rules.DOCKHAND_COST:
+            return f"needs {Rules.DOCKHAND_COST} gold"
+        return None
+
+    def assign_dockhands_disabled_reason(self, player):
+        if not player.dockhouse_completed:
+            return "needs completed dockhouse"
+        if not player.dockhands_full_roster:
+            return f"needs {Rules.DOCKHAND_MAX} dock hands"
+        return None
+
     def repair_damaged_ships_disabled_reason(self, player):
         if player.damaged_ships <= 0:
             return "no damaged ships"
-        if player.raid_repair_cost > 0 and player.gold < player.raid_repair_cost:
+        if player.raid_repair_cost > 0 and player.affordable_repairs() <= 0:
             return f"needs {player.raid_repair_cost} gold"
         return None
 
@@ -2079,13 +2716,16 @@ class Game:
         return None
 
     def payroll_launch_disabled_reason(self, player):
-        if player.payroll_launched:
-            return "already launched"
+        if player.has_payroll_at_sea:
+            return "convoy already at sea"
 
-        if self.turn < Rules.PAYROLL_START_TURN:
+        if self.payroll_launched_this_year(player):
+            return "already launched this year"
+
+        if self.payroll_cycle_turn < Rules.PAYROLL_START_TURN:
             return "too early"
 
-        if self.turn >= Rules.PAYROLL_FINAL_TURN:
+        if self.payroll_cycle_turn >= Rules.PAYROLL_FINAL_TURN:
             return "launches automatically this month"
 
         return None
@@ -2138,6 +2778,14 @@ class Game:
         print(UI.success(
             f"{player.name} starts a trade guild. Port workers will add labor "
             f"on future turns."
+        ))
+
+    def hire_administrator_action(self, player):
+        player.hire_administrator()
+        print(UI.success(
+            f"{player.name} hires an administrator. Emergency supply now costs "
+            f"{player.supply_warchest_markup} gold per missing supply, and payroll "
+            f"rises by {Rules.ADMINISTRATOR_PAYROLL_COST}."
         ))
 
     def start_dry_dock_action(self, player):
@@ -2208,6 +2856,12 @@ class Game:
             "Fishing docks",
             Rules.FISHING_DOCK_COST,
             not player.fishing_dock_built or player.fishing_dock_disabled,
+        )
+        add(
+            "dockhouse",
+            "Dockhouse",
+            Rules.DOCKHOUSE_COST,
+            not player.dockhouse_completed,
         )
         add(
             "dry_dock",
@@ -2302,7 +2956,8 @@ class Game:
             "fort": 2,
             "trade_guild": 3,
             "fishing_dock": 4,
-            "fire_plans": 5,
+            "dockhouse": 5,
+            "fire_plans": 6,
         }
         target = min(affordable_targets, key=lambda item: order.get(item["key"], 99))
         self.apply_admiralty_overtime(player, target["key"], announce=False)
@@ -2340,6 +2995,11 @@ class Game:
             player.fishing_dock_labor = Rules.FISHING_DOCK_LABOR_REQUIRED
             player.fishing_dock_built = True
             player.fishing_dock_disabled = False
+        elif target_key == "dockhouse":
+            player.dockhouse_started = True
+            player.dockhouse_completed = True
+            player.dockhouse_labor = Rules.DOCKHOUSE_LABOR_REQUIRED
+            player.dockhouse_burned = False
         elif target_key == "dry_dock":
             player.dry_dock_started = True
             player.dry_dock_completed = True
@@ -2375,6 +3035,91 @@ class Game:
                 f"{player.name} starts fishing docks. Port workers will add labor "
                 "on future turns."
             ))
+
+    def start_dockhouse_action(self, player):
+        player.start_dockhouse()
+        print(UI.success(
+            f"{player.name} starts a dockhouse. Port workers will add labor "
+            "on future turns."
+        ))
+
+    def hire_dockhand_action(self, player):
+        player.hire_dockhand()
+        print(UI.success(
+            f"{player.name} hires a dock hand "
+            f"({player.dockhands}/{Rules.DOCKHAND_MAX})."
+        ))
+
+    def assign_dockhands_action(self, player):
+        duties = [
+            ("construction", "Construction", "all dock hands add port labor"),
+            ("repair", "Repair crew", "next repairs are 1 gold cheaper, up to 5 ships"),
+            ("boatwright", "Boatwright", "build fishing boats for 1 gold each"),
+        ]
+        if sys.stdin.isatty():
+            duty = self.with_cbreak(lambda: self.prompt_dockhand_duty_menu(player, duties))
+        else:
+            print(f"{player.name}, choose dock hand duty:")
+            for index, (_key, label, help_text) in enumerate(duties, start=1):
+                print(f"{index}. {label} - {help_text}")
+            duty = None
+            while duty is None:
+                choice = self.prompt_non_negative_int("Dock hand duty (0 cancels): ")
+                if choice == 0:
+                    return
+                if 1 <= choice <= len(duties):
+                    duty = duties[choice - 1][0]
+                else:
+                    print(UI.warning("Choose one of the listed duties."))
+        if duty is None:
+            return
+        player.set_dockhand_duty(duty)
+        player.refresh_dockhand_repair_discount()
+        print(UI.success(f"{player.name}'s dock hands switch to {duty}."))
+
+    def prompt_dockhand_duty_menu(self, player, duties):
+        selected = 0
+        message = "Choose the full-roster dock hand duty."
+        while True:
+            control_lines = [
+                f"{player.name}, assign dock hands.",
+                "Special duties use all 5 dock hands for the turn.",
+                "Up/down select, digits jump, Enter chooses.",
+                "",
+            ]
+            for index, (key, label, help_text) in enumerate(duties):
+                prefix = ">" if index == selected else " "
+                current = " current" if key == player.dockhand_duty else ""
+                line = f"{prefix} {index + 1}. {label}{current} - {help_text}"
+                control_lines.append(UI.success(line) if index == selected else line)
+            control_lines.append("  0. Cancel")
+            if message:
+                control_lines.extend(["", message])
+            self.render_play_area(
+                phase=f"{player.name}'s Dock Hands",
+                control_lines=control_lines,
+                info_lines=self.player_economy_lines(player),
+                info_title="Harbor Details",
+                clear=True,
+                include_state=True,
+            )
+            key = self.read_menu_key()
+            if key == "up":
+                selected = (selected - 1) % len(duties)
+            elif key == "down":
+                selected = (selected + 1) % len(duties)
+            elif key == "enter":
+                return duties[selected][0]
+            elif key == "0":
+                return None
+            elif key.isdigit():
+                choice = int(key)
+                if 1 <= choice <= len(duties):
+                    selected = choice - 1
+                    return duties[selected][0]
+                message = UI.warning("No such duty.")
+            else:
+                message = "Use arrows, digits, or Enter."
 
     def buy_fishing_boats_action(self, player):
         affordable = self.affordable_fishing_boats(player)
@@ -2420,13 +3165,10 @@ class Game:
 
     def repair_damaged_ships_action(self, player):
         cost = player.raid_repair_cost
-        if cost == 0:
-            affordable = player.damaged_ships
-        else:
-            affordable = min(player.damaged_ships, player.gold // cost)
+        affordable = player.affordable_repairs()
         menu_amount = self.prompt_amount_menu(
             player,
-            f"Repair damaged ships for {cost} gold each.",
+            f"Repair damaged ships from {cost} gold each.",
             affordable,
             "ships",
             self.player_economy_lines(player),
@@ -2437,7 +3179,7 @@ class Game:
 
         while True:
             amount = self.prompt_non_negative_int(
-                f"{player.name}, repair damaged ships for {cost} gold each "
+                f"{player.name}, repair damaged ships from {cost} gold each "
                 f"(damaged: {player.damaged_ships}, affordable: {affordable}): "
             )
 
@@ -2463,17 +3205,21 @@ class Game:
         ))
 
     def auto_launch_final_payroll(self, player):
-        if player.payroll_launched or self.turn < Rules.PAYROLL_FINAL_TURN:
+        if (
+            player.has_payroll_at_sea
+            or self.payroll_launched_this_year(player)
+            or self.payroll_cycle_turn < Rules.PAYROLL_FINAL_TURN
+        ):
             return
 
-        cost = player.launch_payroll()
+        cost = player.launch_payroll(self.payroll_year)
         print(UI.warning(
             f"{player.name}'s payroll convoy launches automatically "
             f"with {player.payroll_value} gold after paying {cost} gold."
         ))
 
     def launch_payroll_action(self, player):
-        cost = player.launch_payroll()
+        cost = player.launch_payroll(self.payroll_year)
         print(UI.success(
             f"{player.name} launches payroll convoy with "
             f"{player.payroll_value} gold after paying {cost} gold."

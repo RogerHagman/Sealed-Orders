@@ -12,6 +12,8 @@ from bot_benchmark import benchmark_strategy
 from bot_roster import default_bot_strategies
 from bot_runtime import SelfPlayGame
 from bot_strategy import (
+    ADMIRALTY_ABANDONED_PENALTY,
+    ADMIRAL_OPEN_SLOT_PENALTY,
     BOT_WEIGHT_FIELDS,
     DOMINANCE_CAP_PER_GAME,
     MATCHUP_FLOOR_PENALTY,
@@ -22,6 +24,12 @@ from bot_strategy import (
     ROBUSTNESS_CATASTROPHIC_REGRESSION,
     ROBUSTNESS_REGRESSION_PREMIUM,
     SUSTAIN_REPAIR_BONUS,
+    SUPPLY_CRISIS_PENALTY,
+    SUPPLY_DESERTION_PENALTY,
+    SUPPLY_FISHING_LOSS_PENALTY,
+    SUPPLY_HEALTH_BONUS,
+    SUPPLY_SURPLUS_BONUS,
+    SUPPLY_UNREST_BURN_PENALTY,
     SURVIVAL_ADMIRAL_BONUS,
     SURVIVAL_ADMIRALTY_BONUS,
     SURVIVAL_DRY_DOCK_BONUS,
@@ -70,13 +78,32 @@ def empty_evaluation_stats():
         "fishing_dock_built": 0,
         "fishing_dock_active": 0,
         "fishing_boats_total": 0,
+        "dockhouse_started": 0,
+        "dockhouse_completed": 0,
+        "dockhouse_burned": 0,
+        "dockhands_total": 0,
+        "dockhand_idle_turns": 0,
+        "dockhand_construction_duty": 0,
+        "dockhand_repair_duty": 0,
+        "dockhand_boatwright_duty": 0,
+        "dockhand_discounted_repairs": 0,
+        "dockhand_boatwright_boats": 0,
         "dry_dock_started": 0,
         "dry_dock_completed": 0,
         "admiralty_started": 0,
         "admiralty_completed": 0,
+        "admiralty_ever_completed": 0,
+        "admiralty_burned": 0,
         "admiralty_overtime_used": 0,
         "admiral_games": 0,
         "admirals_total": 0,
+        "admiral_slots_total": 0,
+        "admiral_open_slots_total": 0,
+        "supply_total": 0,
+        "supply_crises": 0,
+        "supply_desertions_total": 0,
+        "supply_unrest_burns": 0,
+        "supply_fishing_losses": 0,
         "damaged_ships_total": 0,
         "raid_actions_total": 0,
         "raid_damage_events_total": 0,
@@ -93,6 +120,7 @@ def empty_evaluation_stats():
         "matchup_recovery_bonus": 0,
         "port_loss_pressure_penalty": 0,
         "survival_infra_bonus": 0,
+        "supply_fitness_adjustment": 0,
         "min_matchup_win_rate": 1.0,
         "fitness": 0,
     }
@@ -236,6 +264,23 @@ def add_game_to_evaluation_stats(stats, matchup, game, result, evolving_index):
     if player.fishing_dock_built and not player.fishing_dock_disabled:
         stats["fishing_dock_active"] += 1
     stats["fishing_boats_total"] += player.fishing_boats
+    if player.dockhouse_started or player.dockhouse_completed:
+        stats["dockhouse_started"] += 1
+    if player.dockhouse_completed:
+        stats["dockhouse_completed"] += 1
+    if player.dockhouse_burned:
+        stats["dockhouse_burned"] += 1
+    stats["dockhands_total"] += player.dockhands
+    stats["dockhand_idle_turns"] += player.dockhand_idle_turns
+    if player.dockhands_full_roster:
+        if player.dockhand_duty == "repair":
+            stats["dockhand_repair_duty"] += 1
+        elif player.dockhand_duty == "boatwright":
+            stats["dockhand_boatwright_duty"] += 1
+        else:
+            stats["dockhand_construction_duty"] += 1
+    stats["dockhand_discounted_repairs"] += player.dockhand_discounted_repairs
+    stats["dockhand_boatwright_boats"] += player.dockhand_boatwright_boats
     if player.dry_dock_started or player.dry_dock_completed:
         stats["dry_dock_started"] += 1
     if player.dry_dock_completed:
@@ -248,11 +293,32 @@ def add_game_to_evaluation_stats(stats, matchup, game, result, evolving_index):
         stats["admiralty_completed"] += 1
         stats["survival_infra_bonus"] += SURVIVAL_ADMIRALTY_BONUS
         stats["fitness"] += SURVIVAL_ADMIRALTY_BONUS
+    elif player.admiralty_started:
+        stats["survival_infra_bonus"] -= ADMIRALTY_ABANDONED_PENALTY
+        stats["fitness"] -= ADMIRALTY_ABANDONED_PENALTY
+    if player.admiralty_ever_completed:
+        stats["admiralty_ever_completed"] += 1
+    if player.admiralty_burned:
+        stats["admiralty_burned"] += 1
     if player.admiralty_overtime_used:
         stats["admiralty_overtime_used"] += 1
     if player.admirals:
         stats["admiral_games"] += 1
     stats["admirals_total"] += player.admirals
+    stats["admiral_slots_total"] += player.admiral_slots
+    open_admiral_slots = max(0, player.admiral_slots - player.admirals)
+    stats["admiral_open_slots_total"] += open_admiral_slots
+    open_slot_penalty = open_admiral_slots * ADMIRAL_OPEN_SLOT_PENALTY
+    stats["survival_infra_bonus"] -= open_slot_penalty
+    stats["fitness"] -= open_slot_penalty
+    stats["supply_total"] += player.supply
+    stats["supply_crises"] += player.supply_crises
+    stats["supply_desertions_total"] += player.supply_desertions_total
+    stats["supply_unrest_burns"] += player.supply_unrest_burns
+    stats["supply_fishing_losses"] += player.supply_fishing_losses
+    supply_adjustment = supply_fitness_adjustment(player)
+    stats["supply_fitness_adjustment"] += supply_adjustment
+    stats["fitness"] += supply_adjustment
     stats["damaged_ships_total"] += player.damaged_ships
     stats["raid_actions_total"] += player.raid_actions_total
     stats["raid_damage_events_total"] += player.raid_damage_events
@@ -294,6 +360,19 @@ def add_game_to_evaluation_stats(stats, matchup, game, result, evolving_index):
             port_loss_penalty = 120 + PORT_LOSS_PRESSURE_PENALTY
             stats["port_loss_pressure_penalty"] += PORT_LOSS_PRESSURE_PENALTY
             stats["fitness"] -= port_loss_penalty
+
+
+def supply_fitness_adjustment(player):
+    adjustment = 0
+    if player.supply > 0:
+        adjustment += player.supply * SUPPLY_HEALTH_BONUS
+    if player.supply >= 4:
+        adjustment += SUPPLY_SURPLUS_BONUS
+    adjustment -= player.supply_crises * SUPPLY_CRISIS_PENALTY
+    adjustment -= player.supply_desertions_total * SUPPLY_DESERTION_PENALTY
+    adjustment -= player.supply_unrest_burns * SUPPLY_UNREST_BURN_PENALTY
+    adjustment -= player.supply_fishing_losses * SUPPLY_FISHING_LOSS_PENALTY
+    return adjustment
 
 
 def merge_evaluation_stats(total, addition):
@@ -736,8 +815,11 @@ def strategy_compact_line(strategy):
         f"yard={strategy.shipyard_bias:.2f}, "
         f"fort={strategy.fort_bias:.2f}, "
         f"guild={strategy.trade_guild_bias:.2f}, "
+        f"admin={strategy.administrator_bias:.2f}, "
         f"dock={strategy.fishing_dock_bias:.2f}, "
         f"boat={strategy.fishing_boat_bias:.2f}, "
+        f"dockhouse={strategy.dockhouse_bias:.2f}, "
+        f"dockhand={strategy.dockhand_bias:.2f}, "
         f"dry={strategy.dry_dock_bias:.2f}, "
         f"adm={strategy.admiralty_bias:.2f}, "
         f"admiral={strategy.admiral_bias:.2f}, "
@@ -763,10 +845,15 @@ def print_evolving_strategy(label, strategy, stats):
         f"  infrastructure: shipyard={strategy.shipyard_bias:.2f}, "
         f"fort={strategy.fort_bias:.2f}, "
         f"trade_guild={strategy.trade_guild_bias:.2f}, "
+        f"administrator={strategy.administrator_bias:.2f}, "
         f"guard_captain={strategy.guard_captain_bias:.2f}, "
         f"fire_plans={strategy.fire_plans_bias:.2f}, "
         f"fishing_dock={strategy.fishing_dock_bias:.2f}, "
         f"fishing_boat={strategy.fishing_boat_bias:.2f}, "
+        f"dockhouse={strategy.dockhouse_bias:.2f}, "
+        f"dockhand={strategy.dockhand_bias:.2f}, "
+        f"dockhand_repair={strategy.dockhand_repair_bias:.2f}, "
+        f"dockhand_boatwright={strategy.dockhand_boatwright_bias:.2f}, "
         f"dry_dock={strategy.dry_dock_bias:.2f}, "
         f"admiralty={strategy.admiralty_bias:.2f}, "
         f"admiral={strategy.admiral_bias:.2f}, "
@@ -784,6 +871,13 @@ def print_evolving_strategy(label, strategy, stats):
         f"avg opponent={average(stats, 'opponent_score_total'):.1f}"
     )
     print(
+        f"  supply: avg={average(stats, 'supply_total'):.1f}, "
+        f"crises avg={average(stats, 'supply_crises'):.1f}, "
+        f"desertions avg={average(stats, 'supply_desertions_total'):.1f}, "
+        f"burns avg={average(stats, 'supply_unrest_burns'):.1f}, "
+        f"fitness adj={stats.get('supply_fitness_adjustment', 0)}"
+    )
+    print(
         f"  matchup pressure: dominance cap={stats.get('dominance_cap_penalty', 0)}, "
         f"floor penalty={stats.get('matchup_floor_penalty', 0)}, "
         f"recovery bonus={stats.get('matchup_recovery_bonus', 0)}"
@@ -798,11 +892,23 @@ def print_evolving_strategy(label, strategy, stats):
         f"shipyards {stats.get('shipyard_completed', 0)}/{stats['games']}, "
         f"guilds {stats.get('trade_guild_completed', 0)}/{stats['games']}, "
         f"fishing docks {stats.get('fishing_dock_active', 0)}/{stats['games']}, "
+        f"dockhouses {stats.get('dockhouse_completed', 0)}/{stats['games']}, "
+        f"hands avg {average(stats, 'dockhands_total'):.1f}, "
+        f"hand duties C/R/B "
+        f"{stats.get('dockhand_construction_duty', 0)}/"
+        f"{stats.get('dockhand_repair_duty', 0)}/"
+        f"{stats.get('dockhand_boatwright_duty', 0)}, "
         f"dry docks {stats.get('dry_dock_completed', 0)}/{stats['games']}, "
-        f"admiralties {stats.get('admiralty_completed', 0)}/{stats['games']}, "
+        f"admiralties {stats.get('admiralty_started', 0)}/"
+        f"{stats.get('admiralty_completed', 0)}/"
+        f"{stats.get('admiralty_ever_completed', 0)}/"
+        f"{stats.get('admiralty_burned', 0)}/{stats['games']} "
+        "started/live/ever/burned, "
         f"overtime {stats.get('admiralty_overtime_used', 0)}/{stats['games']}, "
         f"admirals {stats.get('admiral_games', 0)}/{stats['games']} "
-        f"(avg {average(stats, 'admirals_total'):.1f}), "
+        f"(avg {average(stats, 'admirals_total'):.1f}, "
+        f"slots {average(stats, 'admiral_slots_total'):.1f}, "
+        f"open {average(stats, 'admiral_open_slots_total'):.1f}), "
         f"boats avg {average(stats, 'fishing_boats_total'):.1f}, "
         f"raid actions avg {average(stats, 'raid_actions_total'):.1f}, "
         f"damage events avg {average(stats, 'raid_damage_events_total'):.1f}, "
@@ -839,6 +945,7 @@ def training_history_record(generation, status, stats, strategy):
         "matchup_recovery_bonus": stats.get("matchup_recovery_bonus", 0),
         "port_loss_pressure_penalty": stats.get("port_loss_pressure_penalty", 0),
         "survival_infra_bonus": stats.get("survival_infra_bonus", 0),
+        "supply_fitness_adjustment": stats.get("supply_fitness_adjustment", 0),
         "min_matchup_win_rate": stats.get("min_matchup_win_rate", 0),
         "win_rate": stats["wins"] / stats["games"] if stats["games"] else 0,
         "avg_turns": average(stats, "turns_total"),
@@ -853,11 +960,30 @@ def training_history_record(generation, status, stats, strategy):
         "fishing_dock_built_rate": average(stats, "fishing_dock_built"),
         "fishing_dock_active_rate": average(stats, "fishing_dock_active"),
         "avg_fishing_boats": average(stats, "fishing_boats_total"),
+        "dockhouse_started_rate": average(stats, "dockhouse_started"),
+        "dockhouse_completed_rate": average(stats, "dockhouse_completed"),
+        "dockhouse_burned_rate": average(stats, "dockhouse_burned"),
+        "avg_dockhands": average(stats, "dockhands_total"),
+        "avg_dockhand_idle_turns": average(stats, "dockhand_idle_turns"),
+        "dockhand_construction_duty_rate": average(stats, "dockhand_construction_duty"),
+        "dockhand_repair_duty_rate": average(stats, "dockhand_repair_duty"),
+        "dockhand_boatwright_duty_rate": average(stats, "dockhand_boatwright_duty"),
+        "avg_dockhand_discounted_repairs": average(stats, "dockhand_discounted_repairs"),
+        "avg_dockhand_boatwright_boats": average(stats, "dockhand_boatwright_boats"),
         "dry_dock_started_rate": average(stats, "dry_dock_started"),
         "dry_dock_completed_rate": average(stats, "dry_dock_completed"),
         "admiralty_started_rate": average(stats, "admiralty_started"),
         "admiralty_completed_rate": average(stats, "admiralty_completed"),
+        "admiralty_ever_completed_rate": average(stats, "admiralty_ever_completed"),
+        "admiralty_burned_rate": average(stats, "admiralty_burned"),
         "admiralty_overtime_rate": average(stats, "admiralty_overtime_used"),
+        "avg_admiral_slots": average(stats, "admiral_slots_total"),
+        "avg_admiral_open_slots": average(stats, "admiral_open_slots_total"),
+        "avg_supply": average(stats, "supply_total"),
+        "avg_supply_crises": average(stats, "supply_crises"),
+        "avg_supply_desertions": average(stats, "supply_desertions_total"),
+        "avg_supply_unrest_burns": average(stats, "supply_unrest_burns"),
+        "avg_supply_fishing_losses": average(stats, "supply_fishing_losses"),
         "admiral_rate": average(stats, "admiral_games"),
         "avg_admirals": average(stats, "admirals_total"),
         "avg_damaged_ships": average(stats, "damaged_ships_total"),
@@ -929,6 +1055,7 @@ def write_training_history_csv(history, history_path):
         "matchup_recovery_bonus",
         "port_loss_pressure_penalty",
         "survival_infra_bonus",
+        "supply_fitness_adjustment",
         "min_matchup_win_rate",
         "win_rate",
         "avg_turns",
@@ -943,11 +1070,30 @@ def write_training_history_csv(history, history_path):
         "fishing_dock_built_rate",
         "fishing_dock_active_rate",
         "avg_fishing_boats",
+        "dockhouse_started_rate",
+        "dockhouse_completed_rate",
+        "dockhouse_burned_rate",
+        "avg_dockhands",
+        "avg_dockhand_idle_turns",
+        "dockhand_construction_duty_rate",
+        "dockhand_repair_duty_rate",
+        "dockhand_boatwright_duty_rate",
+        "avg_dockhand_discounted_repairs",
+        "avg_dockhand_boatwright_boats",
         "dry_dock_started_rate",
         "dry_dock_completed_rate",
         "admiralty_started_rate",
         "admiralty_completed_rate",
+        "admiralty_ever_completed_rate",
+        "admiralty_burned_rate",
         "admiralty_overtime_rate",
+        "avg_admiral_slots",
+        "avg_admiral_open_slots",
+        "avg_supply",
+        "avg_supply_crises",
+        "avg_supply_desertions",
+        "avg_supply_unrest_burns",
+        "avg_supply_fishing_losses",
         "admiral_rate",
         "avg_admirals",
         "avg_damaged_ships",
@@ -969,8 +1115,13 @@ def write_training_history_csv(history, history_path):
         "shipyard_bias",
         "fort_bias",
         "trade_guild_bias",
+        "administrator_bias",
         "fishing_dock_bias",
         "fishing_boat_bias",
+        "dockhouse_bias",
+        "dockhand_bias",
+        "dockhand_repair_bias",
+        "dockhand_boatwright_bias",
         "dry_dock_bias",
         "admiralty_bias",
         "admiral_bias",
@@ -1000,6 +1151,7 @@ def write_training_history_csv(history, history_path):
                 row["matchup_recovery_bonus"],
                 row["port_loss_pressure_penalty"],
                 row["survival_infra_bonus"],
+                row["supply_fitness_adjustment"],
                 f"{row['min_matchup_win_rate']:.6f}",
                 f"{row['win_rate']:.6f}",
                 f"{row['avg_turns']:.6f}",
@@ -1014,11 +1166,30 @@ def write_training_history_csv(history, history_path):
                 f"{row['fishing_dock_built_rate']:.6f}",
                 f"{row['fishing_dock_active_rate']:.6f}",
                 f"{row['avg_fishing_boats']:.6f}",
+                f"{row['dockhouse_started_rate']:.6f}",
+                f"{row['dockhouse_completed_rate']:.6f}",
+                f"{row['dockhouse_burned_rate']:.6f}",
+                f"{row['avg_dockhands']:.6f}",
+                f"{row['avg_dockhand_idle_turns']:.6f}",
+                f"{row['dockhand_construction_duty_rate']:.6f}",
+                f"{row['dockhand_repair_duty_rate']:.6f}",
+                f"{row['dockhand_boatwright_duty_rate']:.6f}",
+                f"{row['avg_dockhand_discounted_repairs']:.6f}",
+                f"{row['avg_dockhand_boatwright_boats']:.6f}",
                 f"{row['dry_dock_started_rate']:.6f}",
                 f"{row['dry_dock_completed_rate']:.6f}",
                 f"{row['admiralty_started_rate']:.6f}",
                 f"{row['admiralty_completed_rate']:.6f}",
+                f"{row['admiralty_ever_completed_rate']:.6f}",
+                f"{row['admiralty_burned_rate']:.6f}",
                 f"{row['admiralty_overtime_rate']:.6f}",
+                f"{row['avg_admiral_slots']:.6f}",
+                f"{row['avg_admiral_open_slots']:.6f}",
+                f"{row['avg_supply']:.6f}",
+                f"{row['avg_supply_crises']:.6f}",
+                f"{row['avg_supply_desertions']:.6f}",
+                f"{row['avg_supply_unrest_burns']:.6f}",
+                f"{row['avg_supply_fishing_losses']:.6f}",
                 f"{row['admiral_rate']:.6f}",
                 f"{row['avg_admirals']:.6f}",
                 f"{row['avg_damaged_ships']:.6f}",
@@ -1040,8 +1211,13 @@ def write_training_history_csv(history, history_path):
                 f"{strategy['shipyard_bias']:.6f}",
                 f"{strategy['fort_bias']:.6f}",
                 f"{strategy['trade_guild_bias']:.6f}",
+                f"{strategy['administrator_bias']:.6f}",
                 f"{strategy['fishing_dock_bias']:.6f}",
                 f"{strategy['fishing_boat_bias']:.6f}",
+                f"{strategy['dockhouse_bias']:.6f}",
+                f"{strategy['dockhand_bias']:.6f}",
+                f"{strategy['dockhand_repair_bias']:.6f}",
+                f"{strategy['dockhand_boatwright_bias']:.6f}",
                 f"{strategy['dry_dock_bias']:.6f}",
                 f"{strategy['admiralty_bias']:.6f}",
                 f"{strategy['admiral_bias']:.6f}",

@@ -14,10 +14,15 @@ BOT_WEIGHT_FIELDS = [
     "shipyard_bias",
     "fort_bias",
     "trade_guild_bias",
+    "administrator_bias",
     "guard_captain_bias",
     "fire_plans_bias",
     "fishing_dock_bias",
     "fishing_boat_bias",
+    "dockhouse_bias",
+    "dockhand_bias",
+    "dockhand_repair_bias",
+    "dockhand_boatwright_bias",
     "dry_dock_bias",
     "admiralty_bias",
     "admiral_bias",
@@ -29,8 +34,11 @@ BUILD_PROJECTS = [
     "shipyard",
     "fort",
     "trade_guild",
+    "administrator",
     "fishing_dock",
     "fishing_boat",
+    "dockhouse",
+    "dockhand",
     "guard_captain",
     "fire_plans",
     "dry_dock",
@@ -42,26 +50,34 @@ MIN_FLEET_FOR_PROJECTS = 3
 MIN_FLEET_FOR_CONVOYS = 2
 REBUILD_FLEET_TARGET = 4
 MIDGAME_START_TURN = 4
-PRIORITY_PROJECT_MIN_BIAS = 0.10
+PRIORITY_PROJECT_MIN_BIAS = 0.65
 TREASURE_CONVOY_MIN_BIAS = 0.25
 TREASURE_CONVOY_MIN_FLEET = 3
 TREASURE_CONVOY_CORE_TURNS = 6
-MATCHUP_FLOOR_WIN_RATE = 0.25
-DOMINANCE_CAP_PER_GAME = 400
-MATCHUP_FLOOR_PENALTY = 350
-MATCHUP_FLOOR_RECOVERY_BONUS = 30000
-ROBUSTNESS_ALLOWED_REGRESSION = 0.10
+MATCHUP_FLOOR_WIN_RATE = 0.33
+DOMINANCE_CAP_PER_GAME = 300
+MATCHUP_FLOOR_PENALTY = 330
+MATCHUP_FLOOR_RECOVERY_BONUS = 50000
+ROBUSTNESS_ALLOWED_REGRESSION = 0.08
 ROBUSTNESS_REGRESSION_PREMIUM = 5000
-ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.20
+ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.25
 PORT_LOSS_PRESSURE_PENALTY = 80
 SURVIVAL_SHIPYARD_BONUS = 20
 SURVIVAL_FORT_BONUS = 20
-SURVIVAL_TRADE_GUILD_BONUS = 8
+SURVIVAL_TRADE_GUILD_BONUS = 12
 SURVIVAL_DRY_DOCK_BONUS = 12
-SURVIVAL_ADMIRALTY_BONUS = 25
+SURVIVAL_ADMIRALTY_BONUS = 50
 SURVIVAL_ADMIRAL_BONUS = 10
+ADMIRALTY_ABANDONED_PENALTY = 8
+ADMIRAL_OPEN_SLOT_PENALTY = 5
 SURVIVAL_GUARD_CAPTAIN_BONUS = 8
 SUSTAIN_REPAIR_BONUS = 3
+SUPPLY_HEALTH_BONUS = 18
+SUPPLY_CRISIS_PENALTY = 50
+SUPPLY_DESERTION_PENALTY = 90
+SUPPLY_UNREST_BURN_PENALTY = 140
+SUPPLY_FISHING_LOSS_PENALTY = 8
+SUPPLY_SURPLUS_BONUS = 12
 
 
 class BotStrategy:
@@ -78,10 +94,15 @@ class BotStrategy:
         shipyard_bias=None,
         fort_bias=None,
         trade_guild_bias=None,
+        administrator_bias=None,
         guard_captain_bias=None,
         fire_plans_bias=None,
         fishing_dock_bias=None,
         fishing_boat_bias=None,
+        dockhouse_bias=None,
+        dockhand_bias=None,
+        dockhand_repair_bias=None,
+        dockhand_boatwright_bias=None,
         dry_dock_bias=None,
         admiralty_bias=None,
         admiral_bias=None,
@@ -107,6 +128,10 @@ class BotStrategy:
             "trade_guild",
             trade_guild_bias,
         )
+        self.administrator_bias = self.default_project_bias(
+            "administrator",
+            administrator_bias,
+        )
         self.guard_captain_bias = self.default_project_bias(
             "guard_captain",
             guard_captain_bias,
@@ -119,6 +144,14 @@ class BotStrategy:
         self.fishing_boat_bias = self.default_project_bias(
             "fishing_boat",
             fishing_boat_bias,
+        )
+        self.dockhouse_bias = self.default_project_bias("dockhouse", dockhouse_bias)
+        self.dockhand_bias = self.default_project_bias("dockhand", dockhand_bias)
+        self.dockhand_repair_bias = (
+            dockhand_repair_bias if dockhand_repair_bias is not None else 0.5
+        )
+        self.dockhand_boatwright_bias = (
+            dockhand_boatwright_bias if dockhand_boatwright_bias is not None else 0.5
         )
         self.dry_dock_bias = self.default_project_bias("dry_dock", dry_dock_bias)
         self.admiralty_bias = self.default_project_bias("admiralty", admiralty_bias)
@@ -192,6 +225,15 @@ class BotStrategy:
             weights["guard"] += 4.0
             weights["trade"] *= 0.55
             weights["raid"] *= 0.55
+        if player.supply < 0 or player.ships >= 8:
+            supply_need = max(1, player.supply_need)
+            weights["trade"] += min(2.5, supply_need * 0.35)
+            weights["raid"] += min(1.5, supply_need * 0.2)
+        if player.supply <= -3:
+            weights["trade"] += 2.0
+            weights["raid"] += 1.0
+        if player.supply >= 4:
+            weights["trade"] += 1.5
         if opponent.ships <= Rules.PORT_ATTACK_SHIPS_REQUIRED:
             weights["raid"] += 1.5
         if opponent.shipyard_started:
@@ -218,6 +260,8 @@ class BotStrategy:
 
     def run_buy_phase(self, game, player, opponent, rng):
         game.auto_launch_final_payroll(player)
+        self.choose_dockhand_duty(game, player, opponent, rng)
+        player.refresh_dockhand_repair_discount()
 
         if self.run_opening_buy_phase(game, player, opponent, rng):
             return
@@ -243,6 +287,15 @@ class BotStrategy:
             ):
                 if rng.random() < self.project_buy_bias("trade_guild"):
                     player.start_trade_guild()
+            elif (
+                project == "administrator"
+                and game.administrator_disabled_reason(player) is None
+            ):
+                administrator_bias = self.project_buy_bias("administrator")
+                if player.supply < 0 or player.ships >= 8:
+                    administrator_bias += 0.25
+                if rng.random() < min(1.0, administrator_bias):
+                    player.hire_administrator()
             elif (
                 project == "fire_plans"
                 and game.fire_ship_plans_disabled_reason(player) is None
@@ -277,6 +330,28 @@ class BotStrategy:
                     if affordable > 0:
                         game.buy_fishing_boats(player, affordable)
             elif (
+                project == "dockhouse"
+                and game.dockhouse_disabled_reason(player) is None
+            ):
+                dockhouse_bias = self.project_buy_bias("dockhouse")
+                if player.dockhands and not player.dockhouse_completed:
+                    dockhouse_bias = max(dockhouse_bias, 0.9)
+                elif self.has_active_construction(player) or player.ships >= 5:
+                    dockhouse_bias += 0.15
+                if rng.random() < min(1.0, dockhouse_bias):
+                    player.start_dockhouse()
+            elif (
+                project == "dockhand"
+                and game.dockhand_disabled_reason(player) is None
+            ):
+                dockhand_bias = self.project_buy_bias("dockhand")
+                if self.has_active_construction(player):
+                    dockhand_bias += 0.2
+                if player.supply <= -1 or player.payroll_cost >= player.gold + 4:
+                    dockhand_bias *= 0.4
+                if rng.random() < min(1.0, dockhand_bias):
+                    player.hire_dockhand()
+            elif (
                 project == "dry_dock"
                 and game.dry_dock_disabled_reason(player) is None
             ):
@@ -292,6 +367,8 @@ class BotStrategy:
                 admiralty_bias = self.project_buy_bias("admiralty")
                 if player.ships >= Rules.ADMIRAL_SHIPS_PER_SLOT:
                     admiralty_bias += 0.2
+                elif player.ships >= MIN_FLEET_FOR_PROJECTS:
+                    admiralty_bias += 0.1
                 if self.raid_weight >= 3.0 or self.guard_weight >= 3.0:
                     admiralty_bias += 0.2
                 if position["under_fleet_pressure"] or player.fort_completed:
@@ -303,6 +380,8 @@ class BotStrategy:
                 and game.admiral_disabled_reason(player) is None
             ):
                 admiral_bias = self.project_buy_bias("admiral")
+                if player.admirals < player.admiral_slots:
+                    admiral_bias += 0.2
                 if self.raid_weight >= 3.0 or self.guard_weight >= 3.0:
                     admiral_bias += 0.25
                 if player.ships >= (player.admirals + 2) * Rules.ADMIRAL_SHIPS_PER_SLOT:
@@ -322,7 +401,7 @@ class BotStrategy:
                     game.apply_best_admiralty_overtime(player)
 
         if self.should_launch_payroll(game, player, rng):
-            player.launch_payroll()
+            player.launch_payroll(game.payroll_year)
 
         if self.should_launch_treasure(game, player, rng):
             player.launch_treasure()
@@ -412,6 +491,9 @@ class BotStrategy:
         elif action == "start_trade_guild":
             if game.trade_guild_disabled_reason(player) is None:
                 player.start_trade_guild()
+        elif action == "hire_administrator":
+            if game.administrator_disabled_reason(player) is None:
+                player.hire_administrator()
         elif action == "hire_guard_captain":
             if game.guard_captain_disabled_reason(player) is None:
                 player.hire_guard_captain()
@@ -421,6 +503,12 @@ class BotStrategy:
         elif action == "build_fishing_dock":
             if game.fishing_dock_disabled_reason(player) is None:
                 player.build_or_repair_fishing_dock()
+        elif action == "start_dockhouse":
+            if game.dockhouse_disabled_reason(player) is None:
+                player.start_dockhouse()
+        elif action == "hire_dockhand":
+            if game.dockhand_disabled_reason(player) is None:
+                player.hire_dockhand()
         elif action == "buy_fishing_boats":
             if game.buy_fishing_boats_disabled_reason(player) is None:
                 affordable = game.affordable_fishing_boats(player)
@@ -478,13 +566,44 @@ class BotStrategy:
         if rng.random() < min(1.0, repair_score):
             self.repair_all_affordable_damaged_ships(player)
 
+    def choose_dockhand_duty(self, game, player, opponent, rng):
+        if not player.dockhouse_completed or not player.dockhands_full_roster:
+            player.set_dockhand_duty("construction")
+            return
+
+        repair_score = self.dockhand_repair_bias
+        if player.damaged_ships > 0 and player.base_raid_repair_cost > 0:
+            repair_score += min(0.4, player.damaged_ships * 0.08)
+        else:
+            repair_score *= 0.25
+
+        boatwright_score = self.dockhand_boatwright_bias
+        if player.fishing_dock_built and not player.fishing_dock_disabled:
+            boatwright_score += 0.2
+        else:
+            boatwright_score = 0
+        if player.gold < Rules.DOCKHAND_BOATWRIGHT_COST:
+            boatwright_score = 0
+        if player.supply <= -2:
+            boatwright_score *= 0.5
+
+        construction_score = 0.35 + self.construction_idle_bias
+        if self.has_active_construction(player):
+            construction_score += 0.5
+        if player.dockhouse_started and not player.dockhouse_completed:
+            construction_score += 0.5
+
+        scores = {
+            "construction": max(0, construction_score),
+            "repair": max(0, repair_score),
+            "boatwright": max(0, boatwright_score),
+        }
+        player.set_dockhand_duty(self.weighted_choice(scores, rng))
+
     def repair_all_affordable_damaged_ships(self, player):
         if player.damaged_ships <= 0:
             return 0
-        if player.raid_repair_cost == 0:
-            amount = player.damaged_ships
-        else:
-            amount = min(player.damaged_ships, player.gold // player.raid_repair_cost)
+        amount = player.affordable_repairs()
         if amount <= 0:
             return 0
         return player.repair_damaged_ships(amount)
@@ -508,10 +627,16 @@ class BotStrategy:
             return player.ships >= 1
         if project == "fishing_boat":
             return player.fishing_dock_built and not player.fishing_dock_disabled
+        if project == "dockhouse":
+            return player.ships >= 1 or player.dockhands > 0
+        if project == "dockhand":
+            return player.dockhouse_completed and player.dockhands < Rules.DOCKHAND_MAX
+        if project == "administrator":
+            return player.trade_guild_completed and not player.administrator_hired
         if project == "dry_dock":
             return player.shipyard_completed
         if project == "admiralty":
-            return player.ships >= Rules.ADMIRAL_SHIPS_PER_SLOT
+            return player.ships >= MIN_FLEET_FOR_PROJECTS
         if project == "admiral":
             return player.admiralty_completed
         if project == "overtime":
@@ -529,9 +654,11 @@ class BotStrategy:
             return False
 
         launch_score = self.convoy_bias
+        if player.supply < 0 or player.ships >= 8:
+            launch_score += 0.2
         if player.ships >= 6:
             launch_score += 0.2
-        if game.turn >= Rules.PAYROLL_FINAL_TURN - 1:
+        if game.payroll_cycle_turn >= Rules.PAYROLL_FINAL_TURN - 1:
             launch_score += 0.4
         return rng.random() < launch_score
 
@@ -542,6 +669,8 @@ class BotStrategy:
             return False
 
         launch_score = self.convoy_bias
+        if player.supply < 0 or player.ships >= 8:
+            launch_score += 0.25
         if (
             player.ships >= TREASURE_CONVOY_MIN_FLEET
             and game.turn <= TREASURE_CONVOY_CORE_TURNS
@@ -576,6 +705,7 @@ class BotStrategy:
                 player.fort_started and not player.fort_completed,
                 player.trade_guild_started and not player.trade_guild_completed,
                 player.fishing_dock_started and not player.fishing_dock_built,
+                player.dockhouse_started and not player.dockhouse_completed,
                 player.dry_dock_started and not player.dry_dock_completed,
                 player.admiralty_started and not player.admiralty_completed,
             ]
@@ -584,10 +714,24 @@ class BotStrategy:
     def choose_idle_construction_labor(self, player, ships, position=None):
         if not self.has_active_construction(player):
             return 0
-        if player.has_treasure_at_sea or player.has_payroll_at_sea:
+        admiralty_under_construction = (
+            player.admiralty_started and not player.admiralty_completed
+        )
+        if (
+            (player.has_treasure_at_sea or player.has_payroll_at_sea)
+            and not admiralty_under_construction
+        ):
             return 0
 
+        convoy_at_sea = player.has_treasure_at_sea or player.has_payroll_at_sea
         desired_idle = max(1, int(ships * self.construction_idle_bias + 0.999))
+        if admiralty_under_construction:
+            remaining_labor = Rules.ADMIRALTY_LABOR_REQUIRED - player.admiralty_labor
+            admiralty_workers = 2 if remaining_labor >= 2 and ships >= 5 else 1
+            if convoy_at_sea:
+                desired_idle = 1 if ships >= 5 else 0
+            else:
+                desired_idle = max(desired_idle, admiralty_workers)
         if player.ships <= MIN_FLEET_FOR_PROJECTS:
             desired_idle = min(desired_idle, 1)
         if position is not None:
@@ -597,6 +741,11 @@ class BotStrategy:
                 desired_idle = min(desired_idle, 1)
             elif position["asset_gap"] >= 10 or position["income_edge"] > 0:
                 desired_idle = min(ships, desired_idle + 1)
+        if admiralty_under_construction:
+            if convoy_at_sea:
+                desired_idle = 1 if ships >= 5 and desired_idle > 0 else 0
+            else:
+                desired_idle = min(desired_idle, 2)
         return min(ships, desired_idle)
 
     def convoy_escort_guards(self, player, opponent, ships_available):
@@ -672,6 +821,10 @@ class BotStrategy:
         if player.admiralty_completed:
             score += 3 + player.admirals
         elif player.admiralty_started:
+            score += 1
+        if player.dockhouse_completed:
+            score += 1 + min(3, player.dockhands)
+        elif player.dockhouse_started:
             score += 1
         if player.treasure_value > Rules.TREASURE_BASE_VALUE:
             score += 1
@@ -795,7 +948,9 @@ class BotStrategy:
             "shipyard",
             "fort",
             "fishing_dock",
+            "dockhouse",
             "dry_dock",
+            "administrator",
             "admiralty",
             "admiral",
             "overtime",
@@ -804,7 +959,9 @@ class BotStrategy:
         if position["fleet_gap"] <= -2 and project not in {
             "shipyard",
             "fishing_dock",
+            "dockhouse",
             "dry_dock",
+            "administrator",
             "admiralty",
             "admiral",
             "overtime",
@@ -861,10 +1018,15 @@ def load_strategy(strategy_path):
         shipyard_bias=strategy_data.get("shipyard_bias"),
         fort_bias=strategy_data.get("fort_bias"),
         trade_guild_bias=strategy_data.get("trade_guild_bias"),
+        administrator_bias=strategy_data.get("administrator_bias"),
         guard_captain_bias=strategy_data.get("guard_captain_bias"),
         fire_plans_bias=strategy_data.get("fire_plans_bias"),
         fishing_dock_bias=strategy_data.get("fishing_dock_bias"),
         fishing_boat_bias=strategy_data.get("fishing_boat_bias"),
+        dockhouse_bias=strategy_data.get("dockhouse_bias"),
+        dockhand_bias=strategy_data.get("dockhand_bias"),
+        dockhand_repair_bias=strategy_data.get("dockhand_repair_bias"),
+        dockhand_boatwright_bias=strategy_data.get("dockhand_boatwright_bias"),
         dry_dock_bias=strategy_data.get("dry_dock_bias"),
         admiralty_bias=strategy_data.get("admiralty_bias"),
         admiral_bias=strategy_data.get("admiral_bias"),
@@ -927,10 +1089,15 @@ def random_evolving_strategy(rng, name="Evolving"):
         shipyard_bias=rng.random(),
         fort_bias=rng.random(),
         trade_guild_bias=rng.random(),
+        administrator_bias=rng.random(),
         guard_captain_bias=rng.random(),
         fire_plans_bias=rng.random(),
         fishing_dock_bias=rng.random(),
         fishing_boat_bias=rng.random(),
+        dockhouse_bias=rng.random(),
+        dockhand_bias=rng.random(),
+        dockhand_repair_bias=rng.random(),
+        dockhand_boatwright_bias=rng.random(),
         dry_dock_bias=rng.random(),
         admiralty_bias=rng.random(),
         admiral_bias=rng.random(),
@@ -1004,10 +1171,15 @@ def copy_strategy(strategy):
         shipyard_bias=strategy.shipyard_bias,
         fort_bias=strategy.fort_bias,
         trade_guild_bias=strategy.trade_guild_bias,
+        administrator_bias=strategy.administrator_bias,
         guard_captain_bias=strategy.guard_captain_bias,
         fire_plans_bias=strategy.fire_plans_bias,
         fishing_dock_bias=strategy.fishing_dock_bias,
         fishing_boat_bias=strategy.fishing_boat_bias,
+        dockhouse_bias=strategy.dockhouse_bias,
+        dockhand_bias=strategy.dockhand_bias,
+        dockhand_repair_bias=strategy.dockhand_repair_bias,
+        dockhand_boatwright_bias=strategy.dockhand_boatwright_bias,
         dry_dock_bias=strategy.dry_dock_bias,
         admiralty_bias=strategy.admiralty_bias,
         admiral_bias=strategy.admiral_bias,
@@ -1038,10 +1210,15 @@ def strategy_record(strategy):
         "shipyard_bias": strategy.shipyard_bias,
         "fort_bias": strategy.fort_bias,
         "trade_guild_bias": strategy.trade_guild_bias,
+        "administrator_bias": strategy.administrator_bias,
         "guard_captain_bias": strategy.guard_captain_bias,
         "fire_plans_bias": strategy.fire_plans_bias,
         "fishing_dock_bias": strategy.fishing_dock_bias,
         "fishing_boat_bias": strategy.fishing_boat_bias,
+        "dockhouse_bias": strategy.dockhouse_bias,
+        "dockhand_bias": strategy.dockhand_bias,
+        "dockhand_repair_bias": strategy.dockhand_repair_bias,
+        "dockhand_boatwright_bias": strategy.dockhand_boatwright_bias,
         "dry_dock_bias": strategy.dry_dock_bias,
         "admiralty_bias": strategy.admiralty_bias,
         "admiral_bias": strategy.admiral_bias,

@@ -55,7 +55,7 @@
 - Buy phase now uses a repeatable numbered action menu.
 - Unavailable buy-phase actions stay visible with disabled reasons.
 - Players can take multiple buy-phase actions before choosing Done.
-- Final-month payroll still launches automatically before menu actions.
+- Final-month payroll launches automatically before menu actions in each yearly payroll season.
 
 ## Version 0.14
 
@@ -243,7 +243,8 @@
 
 - Added the Admiralty, a command building costing 10 gold and 5 labor.
 - Completed Admiralties count as 15 asset value, unlock Admirals, and unlock one once-per-game overtime construction action.
-- Admirals cost 3 gold each, add 1 gold to payroll cost each, and are recruitable by fleet-size slots: 1 Admiral per 10 ships, up to 5.
+- Completed Admiralty grants 1 immediate Admiral slot; fleet size adds 1 more slot per 10 ships, up to 5.
+- Balance patch: Admiralty now costs 7 gold and 4 labor, and Admirals now cost 2 gold each.
 - Admiral recruitment slots only gate hiring; recruited Admirals stay active if the fleet later shrinks.
 - In raid-vs-guard battles, each Admiral provides one command intervention per resolution.
 - Admiral-commanded forces turn exactly 2 overwhelming-force losses into 3 losses when possible.
@@ -256,6 +257,22 @@
 - Added `Nash Admiral`, a benchmark bot using the shared Nash core opening book: mostly triple guard, some triple raid, a small triple trade counterweight, and a shipyard hold branch.
 - Added `--train-start-strategy` so evolving training can start from a named roster bot such as `Nash Admiral` or from a strategy JSON file.
 - Added [Opening Principles](OPENINGS.md), a human-readable guide to the reusable opening book and early-game doctrine.
+
+## Version 0.45
+
+- The default game length is now 24 months; `--max-turns` still overrides the length for shorter or longer tests.
+- Added a national supply meter from `-5` to `+5`, checked after income and convoy arrivals.
+- Fleet supply need is `ceil(ships / 4)`; trade, raid steals, treasure arrivals, and half fishing income count toward supply coverage.
+- Meeting supply need can stabilize or raise supply, while shortages reduce it. Once supply is already strained, further shortages step down more slowly.
+- If sea income misses supply need, the war chest can cover shortfalls at 4 gold per missing supply point; this prevents shortage but does not create surplus.
+- A completed trade guild can hire an Administrator for 3 gold. Administrators add 1 payroll and reduce war-chest supply cover to 3 gold per missing supply point.
+- Added Dockhouse, a civilian labor building costing 4 gold and 2 labor. Completed Dockhouses count as 6 asset value and unlock Dock Hands.
+- Dock Hands cost 2 gold each, cap at 5, add 1 payroll and 1 supply need each, and do not count as ships, assets, or port defense.
+- While the Dockhouse is complete, Dock Hands normally add 1 port labor each. If the Dockhouse burns, hired Dock Hands remain but sit idle while still costing payroll and supply until the Dockhouse is rebuilt.
+- A full roster of 5 Dock Hands can be assigned to construction, repair crew, or boatwright duty. Repair crew discounts up to 5 damaged-ship repairs by 1 gold each; boatwrights build 1 fishing boat for 1 gold, or 2 for 2 gold with a completed Dry Dock.
+- At negative supply, enemy smugglers earn full trade income. Deeper shortages only trigger damage, desertion, burned infrastructure, or fishing disruption when that month also misses supply need.
+- `+4` and `+5` require strong real surplus, and `+5` requires a completed trade guild. At `+4` and `+5`, completed trade guilds are twice as effective. At `+5`, completed trade ships also earn 1 extra gold each.
+- Training and benchmark output now tracks supply, supply crises, desertions, and unrest burns.
 
 ## Bot Meta Notes
 

@@ -61,6 +61,16 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
         "opponent_score_total": 0,
         "admiralty_completed": 0,
         "admirals_total": 0,
+        "dockhouse_completed": 0,
+        "dockhouse_burned": 0,
+        "dockhands_total": 0,
+        "dockhand_idle_turns": 0,
+        "dockhand_discounted_repairs": 0,
+        "dockhand_boatwright_boats": 0,
+        "supply_total": 0,
+        "supply_crises": 0,
+        "supply_desertions_total": 0,
+        "supply_unrest_burns": 0,
     }
 
     for game_index in range(games):
@@ -85,6 +95,18 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
         if player.admiralty_completed:
             stats["admiralty_completed"] += 1
         stats["admirals_total"] += player.admirals
+        if player.dockhouse_completed:
+            stats["dockhouse_completed"] += 1
+        if player.dockhouse_burned:
+            stats["dockhouse_burned"] += 1
+        stats["dockhands_total"] += player.dockhands
+        stats["dockhand_idle_turns"] += player.dockhand_idle_turns
+        stats["dockhand_discounted_repairs"] += player.dockhand_discounted_repairs
+        stats["dockhand_boatwright_boats"] += player.dockhand_boatwright_boats
+        stats["supply_total"] += player.supply
+        stats["supply_crises"] += player.supply_crises
+        stats["supply_desertions_total"] += player.supply_desertions_total
+        stats["supply_unrest_burns"] += player.supply_unrest_burns
 
         if result["winner_index"] == strategy_index:
             stats["wins"] += 1
@@ -105,11 +127,11 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
 def print_strategy_benchmark(rows):
     print(
         "\nOpponent         Games  Wins  Losses  Draws  Win rate  "
-        "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg  Admty  Avg adm"
+        "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg  Supply  Crisis"
     )
     print(
         "---------------  -----  ----  ------  -----  --------  "
-        "---------  -----------  ---------  ---------  ----------  ----------  -------  -----  -------"
+        "---------  -----------  ---------  ---------  ----------  ----------  -------  ------  ------"
     )
 
     totals = defaultdict(int)
@@ -129,6 +151,16 @@ def print_strategy_benchmark(rows):
             "opponent_score_total",
             "admiralty_completed",
             "admirals_total",
+            "dockhouse_completed",
+            "dockhouse_burned",
+            "dockhands_total",
+            "dockhand_idle_turns",
+            "dockhand_discounted_repairs",
+            "dockhand_boatwright_boats",
+            "supply_total",
+            "supply_crises",
+            "supply_desertions_total",
+            "supply_unrest_burns",
         ]:
             totals[key] += row[key]
 
@@ -145,8 +177,8 @@ def print_strategy_benchmark_row(row):
     avg_loss_turns = row["loss_turns_total"] / row["losses"] if row["losses"] else 0
     avg_score = row["score_total"] / games if games else 0
     avg_opponent_score = row["opponent_score_total"] / games if games else 0
-    admiralty_rate = row.get("admiralty_completed", 0) / games if games else 0
-    avg_admirals = row.get("admirals_total", 0) / games if games else 0
+    avg_supply = row.get("supply_total", 0) / games if games else 0
+    avg_crises = row.get("supply_crises", 0) / games if games else 0
 
     print(
         f"{row['opponent']:<15}  {games:>5}  {row['wins']:>4}  "
@@ -155,7 +187,7 @@ def print_strategy_benchmark_row(row):
         f"{row['port_losses']:>11}  {avg_turns:>9.1f}  "
         f"{avg_win_turns:>9.1f}  {avg_loss_turns:>10.1f}  "
         f"{avg_score:>10.1f}  {avg_opponent_score:>7.1f}  "
-        f"{admiralty_rate * 100:>4.0f}%  {avg_admirals:>7.1f}"
+        f"{avg_supply:>6.1f}  {avg_crises:>6.1f}"
     )
 
 
@@ -191,6 +223,16 @@ def write_strategy_benchmark_csv(rows, output_path):
         "avg_opponent_assets",
         "admiralty_completed_rate",
         "avg_admirals",
+        "dockhouse_completed_rate",
+        "dockhouse_burned_rate",
+        "avg_dockhands",
+        "avg_dockhand_idle_turns",
+        "avg_dockhand_discounted_repairs",
+        "avg_dockhand_boatwright_boats",
+        "avg_supply",
+        "avg_supply_crises",
+        "avg_supply_desertions",
+        "avg_supply_unrest_burns",
     ]
     with output_path.open("w", encoding="utf-8") as output_file:
         output_file.write(",".join(headers))
@@ -213,6 +255,16 @@ def write_strategy_benchmark_csv(rows, output_path):
                 f"{row['opponent_score_total'] / games if games else 0:.6f}",
                 f"{row.get('admiralty_completed', 0) / games if games else 0:.6f}",
                 f"{row.get('admirals_total', 0) / games if games else 0:.6f}",
+                f"{row.get('dockhouse_completed', 0) / games if games else 0:.6f}",
+                f"{row.get('dockhouse_burned', 0) / games if games else 0:.6f}",
+                f"{row.get('dockhands_total', 0) / games if games else 0:.6f}",
+                f"{row.get('dockhand_idle_turns', 0) / games if games else 0:.6f}",
+                f"{row.get('dockhand_discounted_repairs', 0) / games if games else 0:.6f}",
+                f"{row.get('dockhand_boatwright_boats', 0) / games if games else 0:.6f}",
+                f"{row.get('supply_total', 0) / games if games else 0:.6f}",
+                f"{row.get('supply_crises', 0) / games if games else 0:.6f}",
+                f"{row.get('supply_desertions_total', 0) / games if games else 0:.6f}",
+                f"{row.get('supply_unrest_burns', 0) / games if games else 0:.6f}",
             ]
             output_file.write(",".join(str(value) for value in values))
             output_file.write("\n")

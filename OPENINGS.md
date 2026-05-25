@@ -22,6 +22,9 @@ once the board has declared itself.
 - **Shipyard tempo is the clean delayed line.** Staying home, starting shipyard,
   and delaying treasure can be correct when the opponent is likely to attack the
   convoy immediately.
+- **Logistics becomes a real late-game front.** In 24-month games, large fleets
+  need trade, raid steals, treasure arrivals, or enough fishing cover to keep the
+  supply meter out of crisis.
 - **Buy actions are conditional.** Opening-book buy actions are attempted in
   order; illegal or unaffordable actions are skipped.
 
@@ -237,6 +240,9 @@ metadata.
 
 - A treasure launch should change the next two allocations. If treasure or
   payroll is at sea, guards are not optional window dressing; they are the escort.
+- The supply meter rewards steady sea income. A big fleet that stops earning
+  can slide into damage, desertion, burned infrastructure, and fishing losses,
+  while strong surplus can power up trade guilds and completed trade ships.
 - A bot can still have its own personality after the opener. `Nash Fireline`
   remains raid/fire-heavy, while `Nash Admiral` remains more defensive and
   infrastructure-minded.

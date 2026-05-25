@@ -48,8 +48,9 @@ class SelfPlayGame(Game):
         if self.game_over:
             return
 
-        self.apply_port_labor()
         self.advance_convoys()
+        self.apply_supply()
+        self.apply_port_labor()
         strategy_one.run_buy_phase(self, player_one, player_two, self.rng)
         strategy_two.run_buy_phase(self, player_two, player_one, self.rng)
 
@@ -115,8 +116,9 @@ class PlayVsAIGame(Game):
             self.record_turn(before_snapshot, orders_snapshot, after_snapshot)
             return
         self.pause_after_resolution()
-        self.show_bulletin("Port Labor", self.apply_port_labor)
         self.show_bulletin("Convoy Arrivals", self.advance_convoys)
+        self.show_bulletin("Supply", self.apply_supply)
+        self.show_bulletin("Port Labor", self.apply_port_labor)
         self.buy_phase()
         after_snapshot = self.snapshot_turn()
         self.record_turn(before_snapshot, orders_snapshot, after_snapshot)
@@ -138,6 +140,7 @@ class PlayVsAIGame(Game):
         self.add_status_change(lines, "Fort", before, after, "fort_status")
         self.add_status_change(lines, "Trade guild", before, after, "trade_guild_status")
         self.add_status_change(lines, "Fishing", before, after, "fishing_status")
+        self.add_status_change(lines, "Supply", before, after, "supply_status")
         self.add_status_change(lines, "Raid fatigue", before, after, "raid_fatigue_status")
         self.add_status_change(lines, "Dry dock", before, after, "dry_dock_status")
         self.add_status_change(lines, "Fire ships", before, after, "fire_ship_status")
@@ -244,6 +247,12 @@ def player_record(player):
         "fishing_dock_built": player.fishing_dock_built,
         "fishing_dock_disabled": player.fishing_dock_disabled,
         "fishing_boats": player.fishing_boats,
+        "supply": player.supply,
+        "supply_need": player.supply_need,
+        "supply_crises": player.supply_crises,
+        "supply_desertions_total": player.supply_desertions_total,
+        "supply_unrest_burns": player.supply_unrest_burns,
+        "supply_fishing_losses": player.supply_fishing_losses,
         "raid_actions_total": player.raid_actions_total,
         "damaged_ships": player.damaged_ships,
         "raid_damage_events": player.raid_damage_events,
