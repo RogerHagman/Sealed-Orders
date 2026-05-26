@@ -179,3 +179,4 @@ artifacts/**/*.json
 artifacts/**/*.jsonl
 artifacts/**/*.svg
 !artifacts/**/.gitkeep
+.aider*

@@ -83,6 +83,23 @@ class SelfPlayGame(Game):
     def clear_between_players(self):
         pass
 
+    def wants_emergency_supply_warchest(
+        self,
+        player,
+        need,
+        counted_income,
+        covered,
+        cost,
+    ):
+        strategy = self.strategies[self.players.index(player)]
+        return strategy.wants_emergency_supply_warchest(
+            player,
+            need,
+            counted_income,
+            covered,
+            cost,
+        )
+
 
 class PlayVsAIGame(Game):
     def __init__(self, human_name, strategy, rng):
@@ -159,6 +176,30 @@ class PlayVsAIGame(Game):
         self.buy_phase_baselines = {}
         UI.clear_screen()
         self.show_state()
+
+    def wants_emergency_supply_warchest(
+        self,
+        player,
+        need,
+        counted_income,
+        covered,
+        cost,
+    ):
+        if player is self.ai:
+            return self.strategy.wants_emergency_supply_warchest(
+                player,
+                need,
+                counted_income,
+                covered,
+                cost,
+            )
+        return super().wants_emergency_supply_warchest(
+            player,
+            need,
+            counted_income,
+            covered,
+            cost,
+        )
 
     def record_turn(self, before_snapshot, orders_snapshot, after_snapshot):
         self.turn_records.append(

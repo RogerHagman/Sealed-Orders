@@ -95,6 +95,65 @@ the current implementation weight.
 
 ## EV And Mix Notes
 
+### Current Three-Turn Structure Equity
+
+This study used the current rules and compared each opening for three turns
+against the named opener population plus the new structure probes below.
+
+```text
+equity = our final (Assets + Gold) - opponent final (Assets + Gold)
+```
+
+The bracket after each name is the turn-one allocation: `[Trade/Raid/Guard]`.
+`new/unbooked` lines are named probes, not part of the shared opening book yet.
+
+#### Guard Root
+
+| Opener | Equity | Assets | Opp | Gold | Ships | Supply | Status |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| dock_guard_treasure `[0/0/3]` | `+14.88` | `29.51` | `14.63` | `2.00` | `4.42` | `-0.79` | named |
+| treasure_shipyard_shield `[0/0/3]` | `+6.24` | `35.59` | `29.35` | `2.71` | `4.90` | `-1.29` | named |
+| trade_guard_shipyard `[0/0/3]` | `+4.58` | `37.01` | `32.43` | `2.18` | `5.22` | `-0.36` | named |
+| Harbor Office `[0/0/3]` | `-1.73` | `26.85` | `28.58` | `2.16` | `4.11` | `-1.00` | new/unbooked |
+| Admiralty Writ `[0/0/3]` | `-4.74` | `23.85` | `28.59` | `2.59` | `3.54` | `-1.00` | new/unbooked |
+| guild_dock_buildout `[0/0/3]` | `-5.90` | `14.00` | `19.90` | `2.24` | `1.75` | `-2.15` | named |
+| Harbor Vault `[0/0/3]` | `-6.56` | `19.03` | `25.59` | `2.80` | `2.71` | `-0.90` | named |
+| Silent Yard `[0/0/3]` | `-15.26` | `11.02` | `26.28` | `1.01` | `1.67` | `-1.98` | named |
+
+#### Raid Root
+
+| Opener | Equity | Assets | Opp | Gold | Ships | Supply | Status |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Red Quay Raid `[0/3/0]` | `+9.49` | `24.48` | `14.99` | `4.64` | `2.89` | `-0.01` | new/unbooked |
+| Red Yard `[0/3/0]` | `+8.34` | `26.83` | `18.49` | `0.42` | `4.40` | `+0.03` | new/unbooked |
+| raid_treasure_snowball `[0/3/0]` | `+7.59` | `26.16` | `18.56` | `2.44` | `3.95` | `+0.10` | named |
+| Red Sail Gambit `[0/3/0]` | `-1.27` | `20.08` | `21.35` | `3.07` | `2.84` | `-0.16` | named |
+
+#### Trade Root
+
+| Opener | Equity | Assets | Opp | Gold | Ships | Supply | Status |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Quay Rush `[3/0/0]` | `-1.01` | `32.37` | `33.38` | `2.91` | `4.79` | `+1.99` | new/unbooked |
+| guard_captain_harbor_lock `[3/0/0]` | `-1.77` | `25.00` | `26.77` | `2.41` | `3.76` | `+0.95` | named |
+| Admiralty Ledger `[3/0/0]` | `-4.01` | `29.37` | `33.38` | `2.84` | `4.30` | `+1.99` | new/unbooked |
+| Crown Charter `[3/0/0]` | `-4.91` | `28.47` | `33.38` | `0.69` | `4.63` | `+1.99` | new/unbooked |
+| Merchant's Bluff `[3/0/0]` | `-7.18` | `21.14` | `28.32` | `3.97` | `2.86` | `+0.61` | named |
+
+#### Balanced Root
+
+| Opener | Equity | Assets | Opp | Gold | Ships | Supply | Status |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| balanced_treasure_pressure `[1/1/1]` | `+4.91` | `32.41` | `27.50` | `2.65` | `4.96` | `+0.13` | named |
+
+The strongest unexplored structures are currently raid-root lines. `Red Quay
+Raid` is the cleanest new name: it uses the raid opener, takes early Dockhouse
+tempo, keeps enough cash, and avoids the supply collapse that hurts some older
+raid scripts. `Red Yard` is also live, trading more gold pressure for a stronger
+fleet/shipyard posture. The first Dockhouse guard probe, `Harbor Office`, looks
+playable but not yet book-worthy.
+
+### Earlier Nash Core Study
+
 The first study forced each new opening line against the current roster for
 three turns. The goal was to maximize final `Assets + Gold`.
 

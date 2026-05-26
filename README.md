@@ -264,12 +264,12 @@
 - Added a national supply meter from `-5` to `+5`, checked after income and convoy arrivals.
 - Fleet supply need is `ceil(ships / 4)`; trade, raid steals, treasure arrivals, and half fishing income count toward supply coverage.
 - Meeting supply need can stabilize or raise supply, while shortages reduce it. Once supply is already strained, further shortages step down more slowly.
-- If sea income misses supply need, the war chest can cover shortfalls at 4 gold per missing supply point; this prevents shortage but does not create surplus.
+- The war chest no longer covers shortages automatically. It cannot cover the opening January resolution: the first treasure fleet is only released after the outbreak of war. From later Supply steps onward, if a nation is already below 0 supply and then misses sea-income need, the bulletin board may offer emergency stores from the war chest at 4 gold per missing supply point.
 - A completed trade guild can hire an Administrator for 3 gold. Administrators add 1 payroll and reduce war-chest supply cover to 3 gold per missing supply point.
 - Added Dockhouse, a civilian labor building costing 4 gold and 2 labor. Completed Dockhouses count as 6 asset value and unlock Dock Hands.
 - Dock Hands cost 2 gold each, cap at 5, add 1 payroll and 1 supply need each, and do not count as ships, assets, or port defense.
 - While the Dockhouse is complete, Dock Hands normally add 1 port labor each. If the Dockhouse burns, hired Dock Hands remain but sit idle while still costing payroll and supply until the Dockhouse is rebuilt.
-- A full roster of 5 Dock Hands can be assigned to construction, repair crew, or boatwright duty. Repair crew discounts up to 5 damaged-ship repairs by 1 gold each; boatwrights build 1 fishing boat for 1 gold, or 2 for 2 gold with a completed Dry Dock.
+- A full roster of 5 Dock Hands can be assigned to construction, repair crew, or boatwright duty. Repair crew discounts up to 5 damaged-ship repairs by 1 gold each; boatwrights require active fishing docks, then build 1 fishing boat for 1 gold, or 2 for 2 gold with a completed Dry Dock.
 - At negative supply, enemy smugglers earn full trade income. Deeper shortages only trigger damage, desertion, burned infrastructure, or fishing disruption when that month also misses supply need.
 - `+4` and `+5` require strong real surplus, and `+5` requires a completed trade guild. At `+4` and `+5`, completed trade guilds are twice as effective. At `+5`, completed trade ships also earn 1 extra gold each.
 - Training and benchmark output now tracks supply, supply crises, desertions, and unrest burns.

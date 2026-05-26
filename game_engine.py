@@ -541,7 +541,8 @@ class Game:
                 f"fishing boat income: {UI.amount(Rules.FISHING_BOAT_INCOME, 'gold')}"
                 f"{guild_note}",
                 f"  {UI.field('Supply cover')} War chest: "
-                f"{player.supply_warchest_markup} gold per missing supply",
+                f"{player.supply_warchest_markup} gold per missing supply "
+                f"when already below 0 supply",
                 f"  {UI.field('Ships')} {UI.amount(player.ships)}{UI.delta(self.buy_delta(player, 'ships'))}; cost: {UI.amount(player.ship_cost, 'gold')}, "
                 f"ship value: {UI.amount(Rules.SHIP_COST, 'gold')}",
                 f"  {UI.field('Fishing')} Docks: {UI.amount(Rules.FISHING_DOCK_COST, 'gold')}, "
@@ -768,6 +769,12 @@ class Game:
                 ),
                 player.fishing_dock_labor,
                 Rules.FISHING_DOCK_LABOR_REQUIRED,
+            ),
+            (
+                "dockhouse",
+                player.dockhouse_started and not player.dockhouse_completed,
+                player.dockhouse_labor,
+                Rules.DOCKHOUSE_LABOR_REQUIRED,
             ),
             (
                 "dry dock",
@@ -1756,7 +1763,7 @@ class Game:
             counted_fishing = fishing // 2
             counted_income = trade + stolen + treasure + counted_fishing
             need = player.supply_need
-            warchest_supply, warchest_cost = self.apply_supply_warchest(
+            warchest_supply, warchest_cost = self.offer_emergency_supply_warchest(
                 player,
                 need,
                 counted_income,
@@ -1788,17 +1795,71 @@ class Game:
             player.last_supply_events = events[:]
             self.print_supply_queue(player, previous_supply, player.supply, events)
 
-    def apply_supply_warchest(self, player, need, counted_income):
+    def offer_emergency_supply_warchest(self, player, need, counted_income):
+        if self.turn <= 1:
+            return 0, 0
         if need <= 0 or counted_income >= need:
+            return 0, 0
+        if player.supply >= 0:
             return 0, 0
         shortfall = need - counted_income
         markup = player.supply_warchest_markup
-        covered = min(shortfall, max(0, player.gold) // markup)
-        if covered <= 0:
+        cost = shortfall * markup
+        if player.gold < cost:
             return 0, 0
-        cost = covered * markup
+        if not self.wants_emergency_supply_warchest(
+            player,
+            need,
+            counted_income,
+            shortfall,
+            cost,
+        ):
+            return 0, 0
         player.gold -= cost
-        return covered, cost
+        return shortfall, cost
+
+    def wants_emergency_supply_warchest(
+        self,
+        player,
+        need,
+        counted_income,
+        covered,
+        cost,
+    ):
+        if not sys.stdin.isatty():
+            return False
+
+        markup = player.supply_warchest_markup
+        control_lines = [
+            f"{player.name}'s quartermaster requests emergency stores.",
+            f"Spend {cost} gold to cover {covered} missing supply? [y/N]",
+        ]
+        info_lines = [
+            UI.paint("=== EMERGENCY SUPPLY COUNCIL ===", "yellow", bold=True),
+            (
+                f"The harbor bells sound: sea income covers "
+                f"{UI.amount(counted_income, color='yellow')}/{need} supply."
+            ),
+            (
+                f"The treasury can break its war seal for "
+                f"{UI.amount(markup, 'gold', 'yellow')} per missing supply."
+            ),
+            (
+                f"Release {UI.amount(cost, 'gold', 'yellow')} now to add "
+                f"{UI.amount(covered, 'supply', 'green')} before attrition is judged."
+            ),
+        ]
+        with redirect_stdout(sys.__stdout__):
+            self.render_play_area(
+                phase="Emergency Supply",
+                control_lines=control_lines,
+                info_lines=info_lines,
+                info_title="Bulletin Board",
+                clear=True,
+                include_state=True,
+            )
+            response = input(f"{player.name}, open the war chest? [y/N] ")
+        return response.strip().lower() in {"y", "yes"}
 
     def clamp_supply(self, player, supply):
         maximum = Rules.SUPPLY_MAX if player.trade_guild_completed else 4
@@ -3054,21 +3115,36 @@ class Game:
         duties = [
             ("construction", "Construction", "all dock hands add port labor"),
             ("repair", "Repair crew", "next repairs are 1 gold cheaper, up to 5 ships"),
-            ("boatwright", "Boatwright", "build fishing boats for 1 gold each"),
+            (
+                "boatwright",
+                "Boatwright",
+                "build fishing boats for 1 gold each; requires active docks",
+            ),
         ]
         if sys.stdin.isatty():
             duty = self.with_cbreak(lambda: self.prompt_dockhand_duty_menu(player, duties))
         else:
             print(f"{player.name}, choose dock hand duty:")
             for index, (_key, label, help_text) in enumerate(duties, start=1):
-                print(f"{index}. {label} - {help_text}")
+                disabled_reason = self.dockhand_duty_disabled_reason(player, _key)
+                suffix = f" - {disabled_reason}" if disabled_reason else f" - {help_text}"
+                line = f"{index}. {label}{suffix}"
+                print(UI.muted(line) if disabled_reason else line)
             duty = None
             while duty is None:
                 choice = self.prompt_non_negative_int("Dock hand duty (0 cancels): ")
                 if choice == 0:
                     return
                 if 1 <= choice <= len(duties):
-                    duty = duties[choice - 1][0]
+                    selected_duty = duties[choice - 1][0]
+                    disabled_reason = self.dockhand_duty_disabled_reason(
+                        player,
+                        selected_duty,
+                    )
+                    if disabled_reason:
+                        print(UI.warning(f"Duty unavailable: {disabled_reason}."))
+                        continue
+                    duty = selected_duty
                 else:
                     print(UI.warning("Choose one of the listed duties."))
         if duty is None:
@@ -3090,8 +3166,13 @@ class Game:
             for index, (key, label, help_text) in enumerate(duties):
                 prefix = ">" if index == selected else " "
                 current = " current" if key == player.dockhand_duty else ""
-                line = f"{prefix} {index + 1}. {label}{current} - {help_text}"
-                control_lines.append(UI.success(line) if index == selected else line)
+                disabled_reason = self.dockhand_duty_disabled_reason(player, key)
+                suffix = f" - {disabled_reason}" if disabled_reason else f" - {help_text}"
+                line = f"{prefix} {index + 1}. {label}{current}{suffix}"
+                if disabled_reason:
+                    control_lines.append(UI.muted(line))
+                else:
+                    control_lines.append(UI.success(line) if index == selected else line)
             control_lines.append("  0. Cancel")
             if message:
                 control_lines.extend(["", message])
@@ -3109,17 +3190,50 @@ class Game:
             elif key == "down":
                 selected = (selected + 1) % len(duties)
             elif key == "enter":
-                return duties[selected][0]
+                selected_duty = duties[selected][0]
+                disabled_reason = self.dockhand_duty_disabled_reason(
+                    player,
+                    selected_duty,
+                )
+                if disabled_reason:
+                    message = UI.warning(f"Duty unavailable: {disabled_reason}.")
+                    continue
+                return selected_duty
             elif key == "0":
                 return None
             elif key.isdigit():
                 choice = int(key)
                 if 1 <= choice <= len(duties):
                     selected = choice - 1
-                    return duties[selected][0]
+                    selected_duty = duties[selected][0]
+                    disabled_reason = self.dockhand_duty_disabled_reason(
+                        player,
+                        selected_duty,
+                    )
+                    if disabled_reason:
+                        message = UI.warning(f"Duty unavailable: {disabled_reason}.")
+                        continue
+                    return selected_duty
                 message = UI.warning("No such duty.")
             else:
                 message = "Use arrows, digits, or Enter."
+
+    def dockhand_duty_disabled_reason(self, player, duty):
+        if duty == "construction":
+            return None
+        if duty == "repair":
+            if player.damaged_ships <= 0:
+                return "no damaged ships"
+            if player.base_raid_repair_cost <= 0:
+                return "repairs already free"
+            return None
+        if duty == "boatwright":
+            if not player.fishing_dock_built or player.fishing_dock_disabled:
+                return "needs active fishing docks"
+            if player.gold < Rules.DOCKHAND_BOATWRIGHT_COST:
+                return f"needs {Rules.DOCKHAND_BOATWRIGHT_COST} gold"
+            return None
+        return "unknown duty"
 
     def buy_fishing_boats_action(self, player):
         affordable = self.affordable_fishing_boats(player)

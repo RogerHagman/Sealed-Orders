@@ -1231,8 +1231,11 @@ class Nation:
             if self.dockhand_duty == "repair":
                 duty = f"repair -1 x{Rules.DOCKHAND_MAX}"
             elif self.dockhand_duty == "boatwright":
-                boats = 2 if self.dry_dock_completed else 1
-                duty = f"boats {Rules.DOCKHAND_BOATWRIGHT_COST}g each x{boats}"
+                if not self.fishing_dock_built or self.fishing_dock_disabled:
+                    duty = "boatwright idle/no docks"
+                else:
+                    boats = 2 if self.dry_dock_completed else 1
+                    duty = f"boats {Rules.DOCKHAND_BOATWRIGHT_COST}g each x{boats}"
             else:
                 duty = f"construction +{self.dockhand_construction_labor} labor"
             return f"{count}, {duty}, {upkeep}"

@@ -54,13 +54,13 @@ PRIORITY_PROJECT_MIN_BIAS = 0.65
 TREASURE_CONVOY_MIN_BIAS = 0.25
 TREASURE_CONVOY_MIN_FLEET = 3
 TREASURE_CONVOY_CORE_TURNS = 6
-MATCHUP_FLOOR_WIN_RATE = 0.33
+MATCHUP_FLOOR_WIN_RATE = 0.75
 DOMINANCE_CAP_PER_GAME = 300
-MATCHUP_FLOOR_PENALTY = 330
+MATCHUP_FLOOR_PENALTY = 750
 MATCHUP_FLOOR_RECOVERY_BONUS = 50000
-ROBUSTNESS_ALLOWED_REGRESSION = 0.08
+ROBUSTNESS_ALLOWED_REGRESSION = 0.05
 ROBUSTNESS_REGRESSION_PREMIUM = 5000
-ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.25
+ROBUSTNESS_CATASTROPHIC_REGRESSION = 0.20
 PORT_LOSS_PRESSURE_PENALTY = 80
 SURVIVAL_SHIPYARD_BONUS = 20
 SURVIVAL_FORT_BONUS = 20
@@ -68,8 +68,8 @@ SURVIVAL_TRADE_GUILD_BONUS = 12
 SURVIVAL_DRY_DOCK_BONUS = 12
 SURVIVAL_ADMIRALTY_BONUS = 50
 SURVIVAL_ADMIRAL_BONUS = 10
-ADMIRALTY_ABANDONED_PENALTY = 8
-ADMIRAL_OPEN_SLOT_PENALTY = 5
+ADMIRALTY_ABANDONED_PENALTY = 80
+ADMIRAL_OPEN_SLOT_PENALTY = 50
 SURVIVAL_GUARD_CAPTAIN_BONUS = 8
 SUSTAIN_REPAIR_BONUS = 3
 SUPPLY_HEALTH_BONUS = 18
@@ -269,7 +269,6 @@ class BotStrategy:
         self.repair_damaged_raiders(player, rng)
         self.rebuild_fleet(player, rng)
         position = self.evaluate_position(game, player, opponent)
-
         for project in self.buy_project_order():
             if not self.can_spend_on_project(player, project):
                 continue
@@ -619,6 +618,37 @@ class BotStrategy:
         needed = max(1, REBUILD_FLEET_TARGET - player.ships)
         if rng.random() < self.ship_bias:
             player.buy_ships(min(affordable, needed))
+
+    def wants_emergency_supply_warchest(
+        self,
+        player,
+        need,
+        counted_income,
+        covered,
+        cost,
+    ):
+        if player.supply >= 0:
+            return False
+        if player.gold < cost:
+            return False
+
+        shortfall = max(0, need - counted_income)
+        pressure = 0.0
+        if player.supply <= -1:
+            pressure += 0.45
+        if player.supply <= -2:
+            pressure += 0.25
+        if player.supply <= -3:
+            pressure += 0.25
+        if covered >= shortfall:
+            pressure += 0.1
+        if player.ships >= 8:
+            pressure += 0.1
+        if player.has_treasure_at_sea:
+            pressure -= 0.15
+        if player.gold - cost < player.ship_cost and player.ships <= REBUILD_FLEET_TARGET:
+            pressure -= 0.15
+        return pressure >= 0.55
 
     def can_spend_on_project(self, player, project):
         if project == "guard_captain":
