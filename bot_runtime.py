@@ -183,15 +183,18 @@ class PlayVsAIGame(Game):
         from game_state import UI
 
         UI.clear_screen()
-        print(f"\n=== {self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS}) ===")
+        self.orders_submitted_count = 0
+        self.show_header("Orders")
         self.show_state()
         before_snapshot = self.snapshot_turn()
 
         self.human.allocation = self.prompt_allocation(self.human)
+        self.orders_submitted_count = 1
         print(f"\n{self.ai.name} writes sealed orders.")
         self.ai.allocation = self.strategy.choose_allocation(
             self, self.ai, self.human, self.rng
         )
+        self.orders_submitted_count = 2
         self.strategy.observe_opponent_opening(self, self.ai, self.human)
 
         orders_snapshot = self.snapshot_turn()

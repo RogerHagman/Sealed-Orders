@@ -28,6 +28,8 @@ class Game:
         self.buy_phase_baselines = {}
         self.admiral_interventions = {}
         self.supply_income = {}
+        self.orders_submitted_count = 0
+        self.latest_purchase_order = None
 
     def play(self):
         UI.section(f"SEALED ORDERS v{Rules.VERSION}", "magenta")
@@ -46,15 +48,19 @@ class Game:
 
     def play_turn(self):
         UI.clear_screen()
-        UI.section(f"{self.current_month.upper()} ({self.turn}/{Rules.MAX_TURNS})")
+        self.orders_submitted_count = 0
+        self.show_header("Orders")
         self.show_state()
         before_snapshot = self.snapshot_turn()
 
-        for player in self.players:
+        for submitted, player in enumerate(self.players):
+            self.orders_submitted_count = submitted
             self.pause_for_private_entry(player)
             player.allocation = self.prompt_allocation(player)
+            self.orders_submitted_count = submitted + 1
 
         orders_snapshot = self.snapshot_turn()
+        self.orders_submitted_count = len(self.players)
         self.clear_between_players()
         self.reveal_orders()
         self.show_bulletin("Resolution", self.resolve_orders)
@@ -76,6 +82,64 @@ class Game:
                 for player in self.players
             ]
         )
+
+    def show_header(self, phase, submitted=None, order_lines=None):
+        if submitted is None:
+            submitted = self.orders_submitted_count
+        if order_lines is None:
+            order_lines = self.header_order_lines(phase)
+        for line in UI.game_header(
+            month=self.current_month,
+            phase=phase,
+            turn=self.turn,
+            max_turns=Rules.MAX_TURNS,
+            submitted=submitted,
+            total_players=len(self.players),
+            order_lines=order_lines,
+            columns=shutil.get_terminal_size((120, 36)).columns,
+        ):
+            print(line)
+
+    def header_order_lines(self, phase):
+        phase_key = str(phase).lower()
+        if "buy" in phase_key and self.latest_purchase_order:
+            return self.latest_purchase_order
+        for player in self.players:
+            if player.name.lower() in phase_key and "orders" in phase_key:
+                return self.allocation_header_lines(player.allocation)
+        return [UI.muted("Awaiting command")]
+
+    def allocation_header_lines(self, allocation, port_workers=None, effect=None):
+        parts = [
+            f"{UI.symbol('trade')} {allocation.trade}",
+            f"{UI.symbol('raid')} {allocation.raid}",
+            f"{UI.symbol('guard')} {allocation.guard}",
+            f"{UI.symbol('fire')} {allocation.fire}",
+        ]
+        if port_workers is not None:
+            parts.append(f"{UI.symbol('port')} {port_workers}")
+        lines = ["  ".join(parts)]
+        effects = []
+        if allocation.raid:
+            effects.append(f"{UI.symbol('raid')} Pressure {allocation.raid}")
+        if allocation.guard:
+            effects.append(f"{UI.symbol('guard')} Screen {allocation.guard}")
+        if allocation.fire:
+            effects.append(f"{UI.symbol('fire')} Threat {allocation.fire}")
+        if effects:
+            lines.append("  ".join(effects))
+        if effect:
+            lines.append(effect)
+        return lines[:3]
+
+    def purchase_header_lines(self, label, player=None):
+        lines = [f"{self.buy_action_icon(label)} {label}"]
+        if player is not None:
+            summary = self.purchase_summary_line(player)
+            plain_summary = UI.ansi_pattern.sub("", summary).lower()
+            if summary and "no buy-phase changes" not in plain_summary:
+                lines.append(summary)
+        return lines[:3]
 
     def print_full_state(self):
         UI.subheading("Harbor State")
@@ -102,12 +166,12 @@ class Game:
             f"{UI.amount(player.ships, 'ships')}{UI.delta(ships_delta)}  "
             f"{UI.amount(player.asset_score, 'assets', 'yellow')}{UI.delta(asset_delta)}"
         )
-        lines[2] = f"Payroll: {self.player_payroll_status(player)}"
+        lines[2] = f"{UI.symbol_label('Payroll', 'Payroll', 'blue')}: {self.player_payroll_status(player)}"
         return lines
 
     def player_status_lines(self, player):
         lines = player.status_lines()
-        lines[2] = f"{UI.field('Payroll')} {self.player_payroll_status(player)}"
+        lines[2] = f"{UI.symbol_label('Payroll', 'Payroll', 'blue')}: {self.player_payroll_status(player)}"
         return lines
 
     def print_player_panels(self, titled_lines):
@@ -305,13 +369,16 @@ class Game:
         control_lines,
         info_lines,
         info_title="Information",
+        context_lines=None,
+        context_title="Selected",
+        header_order_lines=None,
         clear=True,
         include_state=True,
         width=None,
     ):
         if clear:
             UI.clear_screen()
-        print(UI.paint(f"=== {phase.upper()} ({self.current_month}) ===", "cyan", bold=True))
+        self.show_header(phase, order_lines=header_order_lines)
         if include_state:
             self.show_state()
 
@@ -322,14 +389,22 @@ class Game:
             right_width = content_width - left_width - 2
             control = UI.panel("Control", control_lines, left_width, wrap=True)
             info = UI.panel(info_title, info_lines, right_width, wrap=True)
-            target_height = max(len(control), len(info))
+            if context_lines:
+                context = UI.panel(context_title, context_lines, right_width, wrap=True)
+                right = [*context, *info]
+            else:
+                right = info
+            target_height = max(len(control), len(right))
             control = UI.pad_panel_height(control, left_width, target_height)
-            info = UI.pad_panel_height(info, right_width, target_height)
-            for line in UI.combine_panels(control, info):
+            right = UI.pad_panel_height(right, right_width, target_height)
+            for line in UI.combine_panels(control, right):
                 print(line)
         else:
             for line in UI.panel("Control", control_lines, content_width, wrap=True):
                 print(line)
+            if context_lines:
+                for line in UI.panel(context_title, context_lines, content_width, wrap=True):
+                    print(line)
             for line in UI.panel(info_title, info_lines, content_width, wrap=True):
                 print(line)
 
@@ -483,7 +558,7 @@ class Game:
     def player_payroll_status(self, player):
         if player.has_payroll_at_sea:
             return (
-                f"{player.payroll_value} gold at sea, arrives in "
+                f"{UI.payroll_gold(player.payroll_value)} at sea, arrives in "
                 f"{player.payroll_turns_remaining} turn(s)"
             )
         if self.payroll_launched_this_year(player):
@@ -513,15 +588,13 @@ class Game:
         smuggle_bonus = 0
         if opponent is not None and opponent.supply <= -1:
             smuggle_bonus = max(0, Rules.TRADE_INCOME - Rules.SMUGGLE_INCOME)
-        smuggle_income_text = UI.amount(Rules.SMUGGLE_INCOME)
+        smuggle_income_text = UI.smuggle_gold(Rules.SMUGGLE_INCOME)
         if smuggle_bonus:
             smuggle_income_text += f" {UI.paint(f'+{smuggle_bonus}', 'magenta', bold=True)}"
-        smuggle_income_text += " gold"
         trade_bonus = 1 if player.supply >= 5 else 0
-        trade_income_text = UI.amount(Rules.TRADE_INCOME)
+        trade_income_text = UI.amount(Rules.TRADE_INCOME, "gold")
         if trade_bonus:
             trade_income_text += f" {UI.paint(f'+{trade_bonus}', 'green', bold=True)}"
-        trade_income_text += " gold"
         guild_note = ""
         if player.trade_guild_completed:
             guild_note = ", guild bonus x2" if player.supply >= 4 else ", guild bonus active"
@@ -532,21 +605,21 @@ class Game:
             lines.append(self.purchase_summary_line(player))
         lines.extend(
             [
-                f"  {UI.field('Assets')} {UI.amount(player.asset_score, color='yellow')}{UI.delta(self.buy_delta(player, 'asset_score'))} "
+                f"  {UI.field('Assets')} {UI.amount(player.asset_score, 'assets', 'yellow')}{UI.delta(self.buy_delta(player, 'asset_score'))} "
                 f"(shipyard value: {player.shipyard_value}, "
                 f"fort value: {player.fort_value}, "
                 f"trade guild value: {player.trade_guild_value}, "
                 f"dockhouse value: {player.dockhouse_value}, "
                 f"dry dock value: {player.dry_dock_value}, "
                 f"admiralty value: {player.admiralty_value})",
-                f"  {UI.field('Economy')} Trade income: {trade_income_text}, "
+                f"  {UI.field('Economy')} {UI.symbol('trade')} Trade: {trade_income_text}, "
                 f"smuggle income: {smuggle_income_text}, "
                 f"fishing boat income: {UI.amount(Rules.FISHING_BOAT_INCOME, 'gold')}"
                 f"{guild_note}",
-                f"  {UI.field('Supply cover')} War chest: "
+                f"  {UI.field('Supply cover')} {UI.symbol('supply')} War chest: "
                 f"{player.supply_warchest_markup} gold per missing supply "
                 f"when already below 0 supply",
-                f"  {UI.field('Ships')} {UI.amount(player.ships)}{UI.delta(self.buy_delta(player, 'ships'))}; cost: {UI.amount(player.ship_cost, 'gold')}, "
+                f"  {UI.field('Ships')} {UI.amount(player.ships, 'ships')}{UI.delta(self.buy_delta(player, 'ships'))}; cost: {UI.amount(player.ship_cost, 'gold')}, "
                 f"ship value: {UI.amount(Rules.SHIP_COST, 'gold')}",
                 f"  {UI.field('Fishing')} Docks: {UI.amount(Rules.FISHING_DOCK_COST, 'gold')}, "
                 f"{UI.amount(Rules.FISHING_DOCK_LABOR_REQUIRED, 'labor')}; "
@@ -557,11 +630,11 @@ class Game:
         )
         if not self.payroll_launched_this_year(player):
             lines.append(
-                f"  {UI.field('Payroll cost')} {UI.amount(player.payroll_cost, 'gold')}"
+                f"  {UI.field('Payroll cost')} {UI.payroll_gold(player.payroll_cost)}"
             )
         lines.extend(
             [
-                f"  {UI.field('Treasure')} {player.treasure_value} gold{player.treasure_status}; "
+                f"  {UI.field('Treasure')} {UI.amount(player.treasure_value, 'gold', 'yellow')}{player.treasure_status}; "
                 f"{player.treasure_growth_ticker}",
                 f"  {UI.field('Supply')} {player.supply_status}",
                 f"  {UI.field('Raid fatigue')} {player.raid_fatigue_status}",
@@ -592,16 +665,16 @@ class Game:
             return UI.muted(text)
 
         yard = style(
-            "Yard _|=|_",
+            f"{UI.symbol('shipyard')} Yard",
             player.shipyard_completed,
             player.shipyard_started,
             player.shipyard_destroyed,
             "green",
         )
-        fort = style("Fort /###\\", player.fort_completed, player.fort_started, False, "yellow")
-        guild_text = "Guild [$]"
+        fort = style(f"{UI.symbol('fort')} Fort", player.fort_completed, player.fort_started, False, "yellow")
+        guild_text = f"{UI.symbol('guild')} Guild"
         if player.administrator_hired:
-            guild_text = "Guild [$]+[A]"
+            guild_text = f"{UI.symbol('guild')} Guild+A"
         guild = style(
             guild_text,
             player.trade_guild_completed,
@@ -610,44 +683,44 @@ class Game:
             "green",
         )
         dockhouse = style(
-            "Hands [##]",
+            f"{UI.symbol('dockhouse')} House",
             player.dockhouse_completed,
             player.dockhouse_started,
             player.dockhouse_burned,
             "yellow",
         )
         fishing = style(
-            "Docks ~|_|~",
+            f"{UI.symbol('fishing')} Docks",
             player.fishing_dock_built and not player.fishing_dock_disabled,
             player.fishing_dock_started and not player.fishing_dock_built,
             player.fishing_dock_disabled,
             "blue",
         )
         dry_dock = style(
-            "Dry <_U_>",
+            f"{UI.symbol('dry dock')} Dry",
             player.dry_dock_completed,
             player.dry_dock_started,
             False,
             "cyan",
         )
         admiralty = style(
-            "Adm /\\^/\\",
+            f"{UI.symbol('admiralty')} Adm",
             player.admiralty_completed,
             player.admiralty_started,
             False,
             "white",
         )
-        fire = style("Fire >>>", player.fire_ships_unlocked, False, False, "red")
+        fire = style(f"{UI.symbol('fire')} Fire", player.fire_ships_unlocked, False, False, "red")
         captain_marks = " ".join(
-            UI.paint("/|\\", "magenta", bold=True)
+            UI.paint(UI.symbol("captains"), "magenta", bold=True)
             if index < player.guard_captains
-            else UI.muted("/|\\")
+            else UI.muted(UI.symbol("captains"))
             for index in range(Rules.GUARD_CAPTAIN_MAX)
         )
         admiral_marks = " ".join(
-            UI.paint("<^>", "white", bold=True)
+            UI.paint(UI.symbol("admirals"), "white", bold=True)
             if index < player.admirals
-            else UI.muted("<^>")
+            else UI.muted(UI.symbol("admirals"))
             for index in range(Rules.ADMIRAL_MAX)
         )
 
@@ -658,16 +731,16 @@ class Game:
             f"  {yard}    {fort}    {guild}",
             f"  {fishing}    {dockhouse}    {dry_dock}    {admiralty}",
             f"  {fire}",
-            f"  Hands {self.dockhand_art(player)}",
-            f"  Capt {captain_marks}",
-            f"  Adm  {admiral_marks}",
+            f"  {UI.symbol('dock hands')} Hands {self.dockhand_art(player)}",
+            f"  {UI.symbol('captains')} Capt {captain_marks}",
+            f"  {UI.symbol('admirals')} Adm  {admiral_marks}",
             f"  {self.convoy_art_line(player)}",
         ]
 
     def dockhand_art(self, player):
         marks = []
         for index in range(Rules.DOCKHAND_MAX):
-            mark = "[]"
+            mark = UI.symbol("labor")
             if index < player.dockhands:
                 color = "yellow" if player.dockhouse_completed else "red"
                 marks.append(UI.paint(mark, color, bold=True))
@@ -677,31 +750,31 @@ class Game:
 
     def supply_effect_art_line(self, player):
         if not player.last_supply_events:
-            return f"  Supply {UI.muted('no recent effects')}"
+            return f"  {UI.symbol('supply')} Supply {UI.muted('no recent effects')}"
         return (
-            f"  Supply "
+            f"  {UI.symbol('supply')} Supply "
             f"{player.supply_event_summary}"
         )
 
     def convoy_art_line(self, player):
         treasure = f"T{UI.amount(player.treasure_value)}"
         if player.has_treasure_at_sea:
-            treasure = UI.paint(f"Treasure -> {player.treasure_turns_remaining}", "yellow", bold=True)
+            treasure = UI.paint(f"{UI.symbol('treasure')} Treasure {UI.symbol('convoy')} {player.treasure_turns_remaining}", "yellow", bold=True)
         else:
-            treasure = UI.paint(f"Treasure {treasure}", "green", bold=True)
+            treasure = UI.paint(f"{UI.symbol('treasure')} Treasure {treasure}", "green", bold=True)
 
         if player.has_payroll_at_sea:
-            payroll = UI.paint(f"Payroll -> {player.payroll_turns_remaining}", "yellow", bold=True)
+            payroll = UI.paint(f"{UI.symbol('payroll')} Payroll {UI.symbol('convoy')} {player.payroll_turns_remaining}", "blue", bold=True)
         elif self.payroll_launched_this_year(player):
-            payroll = UI.paint("Payroll done", "green", bold=True)
+            payroll = UI.paint(f"{UI.symbol('payroll')} Payroll {UI.symbol('done')}", "green", bold=True)
         elif self.payroll_cycle_turn < Rules.PAYROLL_START_TURN:
-            payroll = UI.muted("Payroll locked")
+            payroll = UI.muted(f"{UI.symbol('payroll')} Payroll {UI.symbol('locked')}")
         elif self.payroll_cycle_turn >= Rules.PAYROLL_FINAL_TURN:
-            payroll = UI.paint("Payroll auto", "yellow", bold=True)
+            payroll = UI.paint(f"{UI.symbol('payroll')} Payroll auto", "blue", bold=True)
         else:
-            payroll = UI.paint("Payroll ready", "cyan", bold=True)
+            payroll = UI.paint(f"{UI.symbol('payroll')} Payroll ready", "blue", bold=True)
 
-        return f"Convoys {treasure}  {payroll}"
+        return f"{UI.symbol('convoy')} Convoys {treasure}  {payroll}"
 
     def purchase_summary_line(self, player):
         baseline = self.buy_baseline(player)
@@ -747,6 +820,86 @@ class Game:
         projects = [
             (
                 "shipyard",
+                "shipyard",
+                player.shipyard_started and not player.shipyard_completed,
+                player.shipyard_labor,
+                Rules.SHIPYARD_LABOR_REQUIRED,
+            ),
+            (
+                "fort",
+                "fort",
+                player.fort_started and not player.fort_completed,
+                player.fort_labor,
+                Rules.FORT_LABOR_REQUIRED,
+            ),
+            (
+                "trade_guild",
+                "trade guild",
+                player.trade_guild_started and not player.trade_guild_completed,
+                player.trade_guild_labor,
+                Rules.TRADE_GUILD_LABOR_REQUIRED,
+            ),
+            (
+                "fishing_dock",
+                "fishing docks",
+                (
+                    player.fishing_dock_started
+                    and not player.fishing_dock_built
+                    and not player.fishing_dock_disabled
+                ),
+                player.fishing_dock_labor,
+                Rules.FISHING_DOCK_LABOR_REQUIRED,
+            ),
+            (
+                "dockhouse",
+                "dockhouse",
+                player.dockhouse_started and not player.dockhouse_completed,
+                player.dockhouse_labor,
+                Rules.DOCKHOUSE_LABOR_REQUIRED,
+            ),
+            (
+                "dry_dock",
+                "dry dock",
+                player.dry_dock_started and not player.dry_dock_completed,
+                player.dry_dock_labor,
+                Rules.DRY_DOCK_LABOR_REQUIRED,
+            ),
+            (
+                "admiralty",
+                "admiralty",
+                player.admiralty_started and not player.admiralty_completed,
+                player.admiralty_labor,
+                Rules.ADMIRALTY_LABOR_REQUIRED,
+            ),
+        ]
+
+        for key, name, active, current_labor, required_labor in projects:
+            if not active or remaining <= 0:
+                continue
+            applied = min(remaining, required_labor - current_labor)
+            if applied > 0:
+                preview.append(
+                    f"{UI.amount(applied, 'labor')} {UI.symbol('convoy')} "
+                    f"{self.project_icon(key)} {name} "
+                    f"({current_labor + applied}/{required_labor})"
+                )
+                remaining -= applied
+
+        if port_workers <= 0:
+            return "No port workers available for construction."
+        if preview:
+            if remaining:
+                preview.append(f"{UI.amount(remaining, 'worker')} with no project")
+            return f"{UI.symbol_label('port', 'Port labor', 'yellow')}: " + "; ".join(preview)
+        return "Port workers have no active construction project."
+
+    def idle_labor_header_preview(self, player, port_workers):
+        if port_workers <= 0:
+            return None
+
+        projects = [
+            (
+                "shipyard",
                 player.shipyard_started and not player.shipyard_completed,
                 player.shipyard_labor,
                 Rules.SHIPYARD_LABOR_REQUIRED,
@@ -758,13 +911,13 @@ class Game:
                 Rules.FORT_LABOR_REQUIRED,
             ),
             (
-                "trade guild",
+                "trade_guild",
                 player.trade_guild_started and not player.trade_guild_completed,
                 player.trade_guild_labor,
                 Rules.TRADE_GUILD_LABOR_REQUIRED,
             ),
             (
-                "fishing docks",
+                "fishing_dock",
                 (
                     player.fishing_dock_started
                     and not player.fishing_dock_built
@@ -780,7 +933,7 @@ class Game:
                 Rules.DOCKHOUSE_LABOR_REQUIRED,
             ),
             (
-                "dry dock",
+                "dry_dock",
                 player.dry_dock_started and not player.dry_dock_completed,
                 player.dry_dock_labor,
                 Rules.DRY_DOCK_LABOR_REQUIRED,
@@ -792,25 +945,17 @@ class Game:
                 Rules.ADMIRALTY_LABOR_REQUIRED,
             ),
         ]
-
-        for name, active, current_labor, required_labor in projects:
-            if not active or remaining <= 0:
+        for key, active, current_labor, required_labor in projects:
+            if not active:
                 continue
-            applied = min(remaining, required_labor - current_labor)
+            applied = min(port_workers, required_labor - current_labor)
             if applied > 0:
-                preview.append(
-                    f"{UI.amount(applied, 'labor')} to {name} "
-                    f"({current_labor + applied}/{required_labor})"
+                return (
+                    f"{UI.symbol('port')} {applied}{UI.symbol('labor')}"
+                    f"{UI.symbol('convoy')}{self.project_icon(key)} "
+                    f"{current_labor + applied}/{required_labor}"
                 )
-                remaining -= applied
-
-        if port_workers <= 0:
-            return "No port workers available for construction."
-        if preview:
-            if remaining:
-                preview.append(f"{UI.amount(remaining, 'worker')} with no project")
-            return "Port labor: " + "; ".join(preview)
-        return "Port workers have no active construction project."
+        return f"{UI.symbol('port')} {port_workers}{UI.symbol('labor')} idle"
 
     def pause_for_private_entry(self, player):
         self.clear_between_players()
@@ -825,11 +970,8 @@ class Game:
                 phase=f"{player.name}'s Orders",
                 control_lines=[
                     f"Assign up to {UI.amount(player.ships, 'ships')}.",
-                    f"{UI.order_label('Trade')}: earn gold.",
-                    f"{UI.order_label('Raid')}: steal trade, pressure ports.",
-                    f"{UI.order_label('Guard')}: protect lanes and catch smugglers.",
-                    f"{UI.order_label('Fire')}: burn guards and infrastructure when unlocked.",
-                "Unassigned ships become port workers for construction projects.",
+                    f"{UI.order_label('Trade')}  {UI.order_label('Raid')}  {UI.order_label('Guard')}  {UI.order_label('Fire')}",
+                    f"{UI.symbol_label('port', 'Port', 'white')} workers handle unassigned ships.",
                 ],
                 info_lines=self.player_economy_lines(player),
                 info_title="Harbor Details",
@@ -886,7 +1028,7 @@ class Game:
                 title,
                 f"Maximum: {UI.amount(max_amount, unit)}",
                 f"Selected: {UI.amount(value, unit)}",
-                "Left/right adjust. Type digits then Enter to set.",
+                f"{UI.symbol('selected')} Left/right adjust. Digits set amount.",
             ]
             if digit_buffer:
                 control_lines.append(f"Input: {UI.paint(digit_buffer, 'yellow', bold=True)}")
@@ -896,6 +1038,11 @@ class Game:
                 control_lines=control_lines,
                 info_lines=detail_lines,
                 info_title="Harbor Details",
+                context_lines=[
+                    title,
+                    f"Selected {UI.amount(value, unit)} out of {UI.amount(max_amount, unit)}.",
+                    "Press Enter with no pending digits to confirm.",
+                ],
                 clear=True,
                 include_state=True,
             )
@@ -929,6 +1076,34 @@ class Game:
             else:
                 message = "Use left/right, digits, or Enter."
 
+    def order_context_lines(self, player, field, values, port_workers):
+        current = values.get(field, 0)
+        lines_by_field = {
+            "Trade": [
+                f"{UI.order_label('Trade')} keeps money moving.",
+                f"Current: {UI.amount(current, 'ships')}. Earns trade income and grows treasure routes.",
+                "Strong supply and a trade guild make this better.",
+            ],
+            "Raid": [
+                f"{UI.order_label('Raid')} pressures enemy lanes.",
+                f"Current: {UI.amount(current, 'ships')}. Steals trade and can damage ports over time.",
+                "Guards, forts, and captains can blunt raids.",
+            ],
+            "Guard": [
+                f"{UI.order_label('Guard')} protects your sea lanes.",
+                f"Current: {UI.amount(current, 'ships')}. Blocks raids and catches smugglers.",
+                "Guard captains add captures and port defense.",
+            ],
+            "Fire": [
+                f"{UI.order_label('Fire')} burns through defenses.",
+                f"Current: {UI.amount(current, 'ships')}. Targets guards and infrastructure.",
+                "Unlocked fire plans are required before assigning ships here.",
+            ],
+        }
+        lines = lines_by_field.get(field, [str(field)])
+        lines.append(self.idle_labor_preview(player, port_workers))
+        return lines
+
     def prompt_allocation_menu(self, player):
         fields = ["Trade", "Raid", "Guard"]
         if player.fire_ships_unlocked:
@@ -941,23 +1116,27 @@ class Game:
         while True:
             total = sum(values.values())
             port_workers = player.ships - total
+            draft_allocation = Allocation(
+                trade=values.get("Trade", 0),
+                raid=values.get("Raid", 0),
+                guard=values.get("Guard", 0),
+                fire=values.get("Fire", 0),
+            )
             control_lines = [
                 f"{player.name}, assign up to {UI.amount(player.ships, 'ships')}.",
-                f"Orders: {UI.amount(total)}  Port workers: {UI.amount(port_workers)}",
-                "Up/down select, left/right adjust.",
-                "Type digits then Enter to set selected row.",
-                self.idle_labor_preview(player, port_workers),
+                f"{UI.symbol('selected')} Orders {UI.amount(total, 'ships')}  {UI.symbol('port')} Port {UI.amount(port_workers, 'workers')}",
+                "Up/down select, left/right adjust, digits set row.",
             ]
             for index, field in enumerate(fields):
-                marker = UI.paint(">", "green", bold=True) if index == selected else " "
+                marker = UI.selected_marker(index == selected)
                 value = UI.order_amount(field, values[field])
                 control_lines.append(f"{marker} {UI.order_label(field, 6)} {value}")
             if not player.fire_ships_unlocked:
                 control_lines.append(
-                    f"  {UI.order_label('Fire', 6)} {UI.muted('locked')}"
+                    UI.muted(f"  {UI.order_label('Fire', 6)}")
                 )
             control_lines.append(
-                f"  {'Port':<6} {UI.amount(port_workers)} {UI.muted('(automatic)')}"
+                f"  {UI.symbol_label('port', 'Port', 'white')} {UI.amount(port_workers, 'workers')}"
             )
             if digit_buffer:
                 control_lines.append(f"Input: {UI.paint(digit_buffer, 'yellow', bold=True)}")
@@ -968,6 +1147,12 @@ class Game:
                 control_lines=control_lines,
                 info_lines=self.player_economy_lines(player),
                 info_title="Harbor Details",
+                context_lines=self.order_context_lines(player, fields[selected], values, port_workers),
+                header_order_lines=self.allocation_header_lines(
+                    draft_allocation,
+                    port_workers=port_workers,
+                    effect=self.idle_labor_header_preview(player, port_workers),
+                ),
                 clear=True,
                 include_state=True,
             )
@@ -1584,11 +1769,11 @@ class Game:
             active_raids -= 1
             print(
                 f" - Treasure convoy captured; {opponent.name} steals "
-                f"{treasure_stolen} gold."
+                f"{UI.amount(treasure_stolen, 'gold')}."
             )
         elif trader.has_treasure_at_sea:
             print(
-                f" - Treasure convoy worth {trader.treasure_value} gold "
+                f" - Treasure convoy worth {UI.amount(trader.treasure_value, 'gold')} "
                 f"evades raiders."
             )
 
@@ -1598,12 +1783,12 @@ class Game:
             active_raids -= 1
             print(
                 f" - Payroll convoy captured; {opponent.name} steals "
-                f"{payroll_stolen} gold and {trader.name} loses "
+                f"{UI.payroll_gold(payroll_stolen)} and {trader.name} loses "
                 f"{mutiny_losses} ship(s) to mutiny."
             )
         elif trader.has_payroll_at_sea:
             print(
-                f" - Payroll convoy worth {trader.payroll_value} gold "
+                f" - Payroll convoy worth {UI.payroll_gold(trader.payroll_value)} "
                 f"evades raiders."
             )
 
@@ -1671,7 +1856,7 @@ class Game:
         elif raid_intercepts:
             print(
                 f" - {raid_intercepts} trade ship(s) intercepted by raids; "
-                f"{opponent.name} steals {stolen_trade_income} gold."
+                f"{opponent.name} steals {UI.amount(stolen_trade_income, 'gold')}."
             )
         elif active_raids:
             print(" - Raiders patrol the lanes but catch no trade ships.")
@@ -1679,7 +1864,7 @@ class Game:
         if smuggled_trade:
             print(
                 f" - {smuggled_trade} trade ship(s) smuggle past guards for "
-                f"{smuggle_income} gold."
+                f"{UI.smuggle_gold(smuggle_income)}."
             )
             if opponent.supply <= -1 and paid_smuggled_trade:
                 print(
@@ -1689,7 +1874,7 @@ class Game:
         if confiscated_income:
             print(
                 f" - Guard captains catch {confiscated_trade} smuggler(s); "
-                f"{opponent.name} confiscates {confiscated_income} gold."
+                f"{opponent.name} confiscates {UI.smuggle_gold(confiscated_income)}."
             )
         if captured_smuggling_ships:
             print(
@@ -1785,7 +1970,8 @@ class Game:
             warchest_text = ""
             if warchest_supply:
                 warchest_text = (
-                    f", {warchest_supply} war chest for {warchest_cost} gold"
+                    f", emergency war chest {UI.amount(warchest_supply, 'supply', 'green')} "
+                    f"for {UI.amount(warchest_cost, 'gold')}"
                 )
             print(
                 f"{player.name} supply: need {need}, covered by {effective_counted_income} "
@@ -1809,16 +1995,20 @@ class Game:
         markup = player.supply_warchest_markup
         cost = shortfall * markup
         if player.gold < cost:
-            return 0, 0
-        if not self.wants_emergency_supply_warchest(
-            player,
-            need,
-            counted_income,
-            shortfall,
-            cost,
-        ):
+            print(
+                f"{player.name}'s emergency war chest cannot cover "
+                f"{UI.amount(shortfall, 'supply', 'red')}: "
+                f"needs {UI.amount(cost, 'gold')} at "
+                f"{UI.amount(markup, 'gold')} per missing supply."
+            )
             return 0, 0
         player.gold -= cost
+        print(
+            f"{player.name}'s emergency war chest opens automatically: "
+            f"{UI.amount(shortfall, 'supply', 'green')} covered at "
+            f"{UI.amount(markup, 'gold')} per missing supply, "
+            f"{UI.amount(cost, 'gold')} paid."
+        )
         return shortfall, cost
 
     def wants_emergency_supply_warchest(
@@ -1829,40 +2019,7 @@ class Game:
         covered,
         cost,
     ):
-        if not sys.stdin.isatty():
-            return False
-
-        markup = player.supply_warchest_markup
-        control_lines = [
-            f"{player.name}'s quartermaster requests emergency stores.",
-            f"Spend {cost} gold to cover {covered} missing supply? [y/N]",
-        ]
-        info_lines = [
-            UI.paint("=== EMERGENCY SUPPLY COUNCIL ===", "yellow", bold=True),
-            (
-                f"The harbor bells sound: sea income covers "
-                f"{UI.amount(counted_income, color='yellow')}/{need} supply."
-            ),
-            (
-                f"The treasury can break its war seal for "
-                f"{UI.amount(markup, 'gold', 'yellow')} per missing supply."
-            ),
-            (
-                f"Release {UI.amount(cost, 'gold', 'yellow')} now to add "
-                f"{UI.amount(covered, 'supply', 'green')} before attrition is judged."
-            ),
-        ]
-        with redirect_stdout(sys.__stdout__):
-            self.render_play_area(
-                phase="Emergency Supply",
-                control_lines=control_lines,
-                info_lines=info_lines,
-                info_title="Bulletin Board",
-                clear=True,
-                include_state=True,
-            )
-            response = input(f"{player.name}, open the war chest? [y/N] ")
-        return response.strip().lower() in {"y", "yes"}
+        return True
 
     def clamp_supply(self, player, supply):
         maximum = Rules.SUPPLY_MAX if player.trade_guild_completed else 4
@@ -2360,7 +2517,7 @@ class Game:
                     payout = player.complete_payroll()
                     print(
                         f"{player.name}'s payroll convoy arrives safely "
-                        f"({payout} gold delivered)."
+                        f"({UI.payroll_gold(payout)} delivered)."
                     )
                 else:
                     print(
@@ -2384,6 +2541,7 @@ class Game:
 
     def run_buy_menu(self, player):
         self.auto_launch_final_payroll(player)
+        self.latest_purchase_order = None
         if sys.stdin.isatty():
             return self.run_buy_menu_interactive(player)
 
@@ -2391,21 +2549,16 @@ class Game:
             actions = self.buy_menu_actions(player)
             action_lines = [f"{player.name}, choose a buy-phase action."]
             for choice, label, _action, disabled_reason in actions:
-                if disabled_reason:
-                    action_lines.append(
-                        UI.muted(f"{choice}. {label:<24} - {disabled_reason}")
-                    )
-                else:
-                    action_lines.append(
-                        f"{UI.paint(choice + '.', 'green', bold=True)} "
-                        f"{label}"
-                    )
-            action_lines.append(f"{UI.paint('0.', 'green', bold=True)} Done")
+                action_lines.append(
+                    self.buy_action_menu_line(choice, label, disabled_reason)
+                )
+            action_lines.append(self.buy_action_menu_line("0", "Done", None))
             self.render_play_area(
                 phase=f"{player.name}'s Buy Phase",
                 control_lines=action_lines,
                 info_lines=self.player_economy_lines(player),
                 info_title="Harbor Details",
+                header_order_lines=self.latest_purchase_order,
                 clear=True,
                 include_state=True,
             )
@@ -2416,21 +2569,22 @@ class Game:
                 return
 
             selected_action = None
-            for choice, _label, action, disabled_reason in actions:
+            for choice, label, action, disabled_reason in actions:
                 if raw_choice == choice:
-                    selected_action = (action, disabled_reason)
+                    selected_action = (label, action, disabled_reason)
                     break
 
             if selected_action is None:
                 print(UI.warning("Please choose a listed number."))
                 continue
 
-            action, disabled_reason = selected_action
+            label, action, disabled_reason = selected_action
             if disabled_reason:
                 print(UI.warning(f"That action is unavailable: {disabled_reason}."))
                 continue
 
             action(player)
+            self.latest_purchase_order = self.purchase_header_lines(label, player)
 
     def run_buy_menu_interactive(self, player):
         selected = 0
@@ -2442,24 +2596,23 @@ class Game:
             menu_items = actions + [("0", "Done", None, None)]
             selected = min(selected, len(menu_items) - 1)
             control_lines = [f"{player.name}, choose a buy-phase action."]
-            control_lines.append("Up/down select, digits jump, Enter chooses.")
+            control_lines.append(f"{UI.symbol('selected')} Up/down select, digits jump, Enter chooses.")
             if digit_buffer:
                 control_lines.append(f"Input: {UI.paint(digit_buffer, 'yellow', bold=True)}")
             for index, (choice, label, _action, disabled_reason) in enumerate(menu_items):
-                marker = UI.paint(">", "green", bold=True) if index == selected else " "
-                line = f"{marker} {choice}. {label}"
-                if disabled_reason:
-                    line = UI.muted(f"{line:<32} - {disabled_reason}")
-                elif choice == "0":
-                    line = UI.paint(line, "green", bold=True)
-                control_lines.append(line)
+                control_lines.append(
+                    self.buy_action_menu_line(choice, label, disabled_reason, index == selected)
+                )
             control_lines.append(message)
+            choice, label, _action, disabled_reason = menu_items[selected]
 
             self.render_play_area(
                 phase=f"{player.name}'s Buy Phase",
                 control_lines=control_lines,
                 info_lines=self.player_economy_lines(player),
                 info_title="Harbor Details",
+                context_lines=self.buy_action_context_lines(player, choice, label, disabled_reason),
+                header_order_lines=self.latest_purchase_order,
                 clear=True,
                 include_state=True,
             )
@@ -2504,12 +2657,139 @@ class Game:
                     message = UI.warning(f"{label} unavailable: {disabled_reason}.")
                     continue
                 action(player)
+                self.latest_purchase_order = self.purchase_header_lines(label, player)
                 message = f"{label} complete."
             elif key == "escape":
                 digit_buffer = ""
                 message = "Input cleared."
             else:
                 message = "Use arrows, digits, or Enter."
+
+    def buy_action_menu_line(self, choice, label, disabled_reason, selected=False):
+        marker = UI.selected_marker(selected)
+        icon = self.buy_action_icon(label)
+        line = f"{marker} {choice:>2}. {icon} {label}"
+        if disabled_reason:
+            return UI.muted(line)
+        if selected or choice == "0":
+            return UI.paint(line, "green", bold=True)
+        return line
+
+    def buy_action_icon(self, label):
+        lowered = label.lower()
+        for key, icon in [
+            ("shipyard", UI.symbol("shipyard")),
+            ("repair", UI.symbol("warning")),
+            ("fort", UI.symbol("fort")),
+            ("guild", UI.symbol("guild")),
+            ("administrator", "A"),
+            ("fishing", UI.symbol("fishing")),
+            ("dockhouse", UI.symbol("dockhouse")),
+            ("dock hand", UI.symbol("dock hands")),
+            ("guard captain", UI.symbol("captains")),
+            ("fire", UI.symbol("fire")),
+            ("dry dock", UI.symbol("dry dock")),
+            ("admiralty", UI.symbol("admiralty")),
+            ("admiral", UI.symbol("admirals")),
+            ("treasure", UI.symbol("treasure")),
+            ("payroll", UI.symbol("payroll")),
+            ("done", UI.symbol("done")),
+            ("ship", UI.symbol("ships")),
+        ]:
+            if key in lowered:
+                return icon
+        return "•"
+
+    def buy_action_context_lines(self, player, choice, label, disabled_reason):
+        if choice == "0":
+            return [
+                f"{UI.symbol_label('done', 'Done', 'green')} ends {player.name}'s buy phase.",
+                "Use this when purchases and launches are finished.",
+            ]
+
+        details = {
+            "Buy ships": [
+                f"Cost: {UI.amount(player.ship_cost, 'gold')} each.",
+                "Adds fleet capacity for future orders and asset value.",
+            ],
+            "Start shipyard": [
+                f"Cost: {UI.amount(Rules.SHIPYARD_COST, 'gold')}, {UI.amount(Rules.SHIPYARD_LABOR_REQUIRED, 'labor')}.",
+                "Unlocks cheaper ship repairs and enables dry dock planning.",
+            ],
+            "Start fort": [
+                f"Cost: {UI.amount(Rules.FORT_COST, 'gold')}, {UI.amount(Rules.FORT_LABOR_REQUIRED, 'labor')}.",
+                "Adds asset value and protects the home port from raids and fire.",
+            ],
+            "Start trade guild": [
+                f"Cost: {UI.amount(Rules.TRADE_GUILD_COST, 'gold')}, {UI.amount(Rules.TRADE_GUILD_LABOR_REQUIRED, 'labor')}.",
+                "Improves trade economy and enables administrator hiring.",
+            ],
+            "Hire administrator": [
+                f"Cost: {UI.amount(Rules.ADMINISTRATOR_COST, 'gold')}.",
+                "Improves emergency supply support and payroll efficiency.",
+            ],
+            "Build/repair fishing docks": [
+                f"Cost: {UI.amount(Rules.FISHING_DOCK_COST, 'gold')}, {UI.amount(Rules.FISHING_DOCK_LABOR_REQUIRED, 'labor')}.",
+                "Enables fishing boats for steady income.",
+            ],
+            "Start dockhouse": [
+                f"Cost: {UI.amount(Rules.DOCKHOUSE_COST, 'gold')}, {UI.amount(Rules.DOCKHOUSE_LABOR_REQUIRED, 'labor')}.",
+                "Unlocks dock hands for labor, repair, and boatwright duty.",
+            ],
+            "Hire dock hand": [
+                f"Cost: {UI.amount(Rules.DOCKHAND_COST, 'gold')}.",
+                "Adds a worker that can accelerate harbor work once rostered.",
+            ],
+            "Assign dock hands": [
+                "Sets the full dock-hand roster duty for this turn.",
+                "Construction adds labor; repair and boatwright duties shift economy.",
+            ],
+            "Buy fishing boats": [
+                f"Cost: {UI.amount(Rules.FISHING_BOAT_COST, 'gold')} each.",
+                "Adds recurring fishing income and asset value.",
+            ],
+            "Hire guard captain": [
+                f"Cost: {UI.amount(Rules.GUARD_CAPTAIN_COST, 'gold')}.",
+                "Improves guard effects, captures, and port defense.",
+            ],
+            "Buy fire ship plans": [
+                f"Cost: {UI.amount(Rules.FIRE_SHIP_UPGRADE_COST, 'gold')}.",
+                "Unlocks Fire orders starting next turn.",
+            ],
+            "Repair damaged ships": [
+                f"Repair cost: {UI.amount(player.raid_repair_cost, 'gold')} each.",
+                "Returns damaged ships to full fighting strength.",
+            ],
+            "Start dry dock": [
+                f"Cost: {UI.amount(Rules.DRY_DOCK_COST, 'gold')}, {UI.amount(Rules.DRY_DOCK_LABOR_REQUIRED, 'labor')}.",
+                "Adds asset value and supports naval infrastructure.",
+            ],
+            "Start admiralty": [
+                f"Cost: {UI.amount(Rules.ADMIRALTY_COST, 'gold')}, {UI.amount(Rules.ADMIRALTY_LABOR_REQUIRED, 'labor')}.",
+                "Unlocks admirals and one-time overtime completion.",
+            ],
+            "Recruit admiral": [
+                f"Cost: {UI.amount(Rules.ADMIRAL_COST, 'gold')}.",
+                "Adds command power, limited by fleet size.",
+            ],
+            "Admiralty overtime": [
+                "Completes one eligible harbor project immediately.",
+                "Costs double the selected project base gold cost.",
+            ],
+            "Launch treasure convoy": [
+                f"Arrives after {Rules.TREASURE_TRAVEL_TURNS} turn(s).",
+                "Banks treasure value if the convoy survives the route.",
+            ],
+            "Launch payroll convoy": [
+                f"Payroll window: {self.payroll_window_text()}.",
+                "Pays crews and sends payroll value to sea.",
+            ],
+        }
+        lines = [f"{self.buy_action_icon(label)} {UI.label(label)}"]
+        if disabled_reason:
+            lines.append(UI.warning(f"Unavailable: {disabled_reason}."))
+        lines.extend(details.get(label, ["Choose this action to update your harbor."]))
+        return lines[:5]
 
     def buy_menu_actions(self, player):
         return [
@@ -2965,18 +3245,18 @@ class Game:
         while True:
             control_lines = [
                 f"{player.name}, choose an overtime project.",
-                "Pay double base gold cost; labor is completed instantly.",
-                "Up/down select, digits jump, Enter chooses.",
+                f"{UI.symbol('admiralty')} Double base gold; instant completion.",
+                f"{UI.symbol('selected')} Up/down select, digits jump, Enter chooses.",
                 "",
             ]
             for index, target in enumerate(targets):
-                prefix = ">" if index == selected else " "
+                prefix = UI.selected_marker(index == selected)
                 line = (
-                    f"{prefix} {index + 1}. {target['label']} "
-                    f"- {target['cost']} gold"
+                    f"{prefix} {index + 1}. {self.project_icon(target['key'])} "
+                    f"{target['label']}"
                 )
                 control_lines.append(UI.success(line) if index == selected else line)
-            control_lines.append("  0. Cancel")
+            control_lines.append(f"  0. {UI.symbol_label('cancel', 'Cancel', 'red')}")
             if message:
                 control_lines.extend(["", message])
 
@@ -2985,6 +3265,7 @@ class Game:
                 control_lines=control_lines,
                 info_lines=self.player_economy_lines(player),
                 info_title="Harbor Details",
+                context_lines=self.admiralty_overtime_context_lines(targets[selected]),
                 clear=True,
                 include_state=True,
             )
@@ -3026,6 +3307,26 @@ class Game:
         target = min(affordable_targets, key=lambda item: order.get(item["key"], 99))
         self.apply_admiralty_overtime(player, target["key"], announce=False)
         return True
+
+    def project_icon(self, key):
+        return {
+            "shipyard": UI.symbol("shipyard"),
+            "fort": UI.symbol("fort"),
+            "trade_guild": UI.symbol("guild"),
+            "fishing_dock": UI.symbol("fishing"),
+            "dockhouse": UI.symbol("dockhouse"),
+            "dry_dock": UI.symbol("dry dock"),
+            "admiralty": UI.symbol("admiralty"),
+            "fire_plans": UI.symbol("fire"),
+        }.get(key, "•")
+
+    def admiralty_overtime_context_lines(self, target):
+        return [
+            f"{self.project_icon(target['key'])} {UI.label(target['label'])}",
+            f"Cost now: {UI.amount(target['cost'], 'gold')}.",
+            "Completes all labor immediately through Admiralty overtime.",
+            "This one-time command cannot be used again this game.",
+        ]
 
     def apply_admiralty_overtime(self, player, target_key, announce=True):
         target = next(
@@ -3156,27 +3457,38 @@ class Game:
         player.refresh_dockhand_repair_discount()
         print(UI.success(f"{player.name}'s dock hands switch to {duty}."))
 
+    def dockhand_duty_context_lines(self, player, duty):
+        key, label, help_text = duty
+        disabled_reason = self.dockhand_duty_disabled_reason(player, key)
+        lines = [
+            f"{UI.symbol_label('dock hands', label, 'yellow')}",
+            help_text.capitalize() + ".",
+        ]
+        if key == player.dockhand_duty:
+            lines.append(UI.success("Current duty."))
+        if disabled_reason:
+            lines.append(UI.warning(f"Unavailable: {disabled_reason}."))
+        return lines
+
     def prompt_dockhand_duty_menu(self, player, duties):
         selected = 0
         message = "Choose the full-roster dock hand duty."
         while True:
             control_lines = [
                 f"{player.name}, assign dock hands.",
-                "Special duties use all 5 dock hands for the turn.",
-                "Up/down select, digits jump, Enter chooses.",
+                f"{UI.symbol('dock hands')} Full roster duty for this turn.",
+                f"{UI.symbol('selected')} Up/down select, digits jump, Enter chooses.",
                 "",
             ]
             for index, (key, label, help_text) in enumerate(duties):
-                prefix = ">" if index == selected else " "
-                current = " current" if key == player.dockhand_duty else ""
+                prefix = UI.selected_marker(index == selected)
                 disabled_reason = self.dockhand_duty_disabled_reason(player, key)
-                suffix = f" - {disabled_reason}" if disabled_reason else f" - {help_text}"
-                line = f"{prefix} {index + 1}. {label}{current}{suffix}"
+                line = f"{prefix} {index + 1}. {UI.symbol('dock hands')} {label}"
                 if disabled_reason:
                     control_lines.append(UI.muted(line))
                 else:
                     control_lines.append(UI.success(line) if index == selected else line)
-            control_lines.append("  0. Cancel")
+            control_lines.append(f"  0. {UI.symbol_label('cancel', 'Cancel', 'red')}")
             if message:
                 control_lines.extend(["", message])
             self.render_play_area(
@@ -3184,6 +3496,10 @@ class Game:
                 control_lines=control_lines,
                 info_lines=self.player_economy_lines(player),
                 info_title="Harbor Details",
+                context_lines=self.dockhand_duty_context_lines(
+                    player,
+                    duties[selected],
+                ),
                 clear=True,
                 include_state=True,
             )
@@ -3332,14 +3648,16 @@ class Game:
         cost = player.launch_payroll(self.payroll_year)
         print(UI.warning(
             f"{player.name}'s payroll convoy launches automatically "
-            f"with {player.payroll_value} gold after paying {cost} gold."
+            f"with {UI.payroll_gold(player.payroll_value)} after paying "
+            f"{UI.amount(cost, 'gold')}."
         ))
 
     def launch_payroll_action(self, player):
         cost = player.launch_payroll(self.payroll_year)
         print(UI.success(
             f"{player.name} launches payroll convoy with "
-            f"{player.payroll_value} gold after paying {cost} gold."
+            f"{UI.payroll_gold(player.payroll_value)} after paying "
+            f"{UI.amount(cost, 'gold')}."
         ))
 
     def prompt_yes_no(self, prompt):
@@ -3355,22 +3673,22 @@ class Game:
                 (
                     player.name,
                     [
-                        f"Gold: {UI.amount(player.gold, color=player.gold_color)}",
-                        f"Ships: {UI.amount(player.ships)} ({UI.amount(player.ship_value, 'value', 'yellow')})",
-                        f"Shipyard: {UI.amount(player.shipyard_value, 'value', 'yellow')}",
-                        f"Fort: {UI.amount(player.fort_value, 'value', 'yellow')}",
-                        f"Trade guild: {UI.amount(player.trade_guild_value, 'value', 'yellow')}",
+                        f"{UI.symbol_label('Gold', 'Gold', player.gold_color)}: {UI.amount(player.gold, 'gold', player.gold_color)}",
+                        f"{UI.symbol_label('Ships', 'Ships', 'cyan')}: {UI.amount(player.ships, 'ships')} ({UI.amount(player.ship_value, 'value', 'yellow')})",
+                        f"{UI.symbol_label('Shipyard', 'Shipyard', 'green')}: {UI.amount(player.shipyard_value, 'value', 'yellow')}",
+                        f"{UI.symbol_label('Fort', 'Fort', 'yellow')}: {UI.amount(player.fort_value, 'value', 'yellow')}",
+                        f"{UI.symbol_label('Trade guild', 'Trade guild', 'green')}: {UI.amount(player.trade_guild_value, 'value', 'yellow')}",
                         (
-                            "Fishing: "
+                            f"{UI.symbol_label('Fishing', 'Fishing', 'blue')}: "
                             f"{UI.amount(player.fishing_dock_value + player.fishing_boat_value, 'value', 'yellow')}"
                         ),
-                        f"Dry dock: {UI.amount(player.dry_dock_value, 'value', 'yellow')}",
-                        f"Admiralty: {UI.amount(player.admiralty_value, 'value', 'yellow')}",
-                        f"Admirals: {UI.amount(player.admirals)}",
-                        f"Guard captains: {UI.amount(player.guard_captains)}",
+                        f"{UI.symbol_label('Dry dock', 'Dry dock', 'cyan')}: {UI.amount(player.dry_dock_value, 'value', 'yellow')}",
+                        f"{UI.symbol_label('Admiralty', 'Admiralty', 'white')}: {UI.amount(player.admiralty_value, 'value', 'yellow')}",
+                        f"{UI.symbol_label('Admirals', 'Admirals', 'white')}: {UI.amount(player.admirals)}",
+                        f"{UI.symbol_label('Captains', 'Guard captains', 'magenta')}: {UI.amount(player.guard_captains)}",
                         (
-                            "Total assets: "
-                            f"{UI.amount(player.asset_score, color='yellow')}"
+                            f"{UI.symbol_label('Assets', 'Total assets', 'yellow')}: "
+                            f"{UI.amount(player.asset_score, 'assets', 'yellow')}"
                         ),
                     ],
                 )

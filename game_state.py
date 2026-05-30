@@ -5,6 +5,7 @@ import math
 import os
 import re
 import sys
+import unicodedata
 
 
 class UI:
@@ -28,6 +29,45 @@ class UI:
         "raid": "orange",
         "guard": "blue",
         "fire": "red",
+    }
+    symbols = {
+        "gold": "◉",
+        "ships": "⛵",
+        "ship": "⛵",
+        "assets": "◆",
+        "asset": "◆",
+        "value": "◆",
+        "labor": "⚒",
+        "worker": "⚒",
+        "workers": "⚒",
+        "supply": "▣",
+        "trade": "⇄",
+        "raid": "⚔",
+        "guard": "◇",
+        "fire": "※",
+        "port": "⌂",
+        "shipyard": "⚓",
+        "yard": "⚓",
+        "fort": "▰",
+        "trade guild": "♜",
+        "guild": "♜",
+        "fishing": "≈",
+        "dockhouse": "⌂",
+        "dock hands": "⚒",
+        "dry dock": "▱",
+        "admiralty": "⌃",
+        "admirals": "⌃",
+        "captains": "◇",
+        "convoy": "→",
+        "treasure": "◉",
+        "payroll": "◉",
+        "complete": "✓",
+        "started": "◐",
+        "locked": "×",
+        "warning": "!",
+        "selected": "›",
+        "done": "✓",
+        "cancel": "×",
     }
     ansi_pattern = re.compile(r"\033\[[0-9;]*m")
     amount_pattern = re.compile(r"(?<![\w.])-?\d+(?:/\d+)?(?:\.\d+)?")
@@ -76,8 +116,27 @@ class UI:
         return cls.paint(text, "white", bold=True)
 
     @classmethod
-    def field(cls, text, width=15):
-        return cls.label(f"{text:<{width}}")
+    def symbol(cls, key, default=""):
+        return cls.symbols.get(str(key).lower(), default)
+
+    @classmethod
+    def symbol_label(cls, key, text=None, color=None, bold=True):
+        icon = cls.symbol(key)
+        label = str(text if text is not None else key)
+        if icon:
+            label = f"{icon} {label}"
+        return cls.paint(label, color, bold=bold)
+
+    @classmethod
+    def selected_marker(cls, selected=False):
+        marker = cls.symbol("selected", ">") if selected else " "
+        return cls.paint(marker, "green", bold=True) if selected else marker
+
+    @classmethod
+    def field(cls, text, width=15, icon=True):
+        display = f"{cls.symbol(text)} {text}" if icon and cls.symbol(text) else str(text)
+        padding = " " * max(0, width - cls.visible_len(display))
+        return cls.label(f"{display}{padding}")
 
     @classmethod
     def muted(cls, text):
@@ -96,19 +155,34 @@ class UI:
         return cls.paint(text, "red", bold=True)
 
     @classmethod
-    def amount(cls, value, unit="", color="cyan"):
-        suffix = f" {unit}" if unit else ""
+    def amount(cls, value, unit="", color="cyan", compact=True):
+        if unit == "gold" and color == "cyan":
+            color = "yellow"
+        if unit and compact and cls.symbol(unit):
+            suffix = f" {cls.symbol(unit)}"
+        else:
+            suffix = f" {unit}" if unit else ""
         return f"{cls.paint(str(value), color, bold=True)}{suffix}"
+
+    @classmethod
+    def payroll_gold(cls, value):
+        return cls.amount(value, "gold", "blue")
+
+    @classmethod
+    def smuggle_gold(cls, value):
+        return cls.amount(value, "gold", "magenta")
 
     @classmethod
     def order_color(cls, role):
         return cls.order_colors.get(str(role).lower(), "white")
 
     @classmethod
-    def order_label(cls, role, width=None):
+    def order_label(cls, role, width=None, icon=True):
         text = str(role)
+        if icon and cls.symbol(role):
+            text = f"{cls.symbol(role)} {text}"
         if width is not None:
-            text = f"{text:<{width}}"
+            text = text + " " * max(0, width - cls.visible_len(text))
         return cls.paint(text, cls.order_color(role), bold=True)
 
     @classmethod
@@ -134,6 +208,15 @@ class UI:
         return cls.paint(f"{current}/{total}", color, bold=bool(color))
 
     @classmethod
+    def cost(cls, gold=0, labor=0):
+        parts = []
+        if gold:
+            parts.append(cls.amount(gold, "gold", "yellow"))
+        if labor:
+            parts.append(cls.amount(labor, "labor"))
+        return ", ".join(parts)
+
+    @classmethod
     def delta(cls, value):
         if value == 0:
             return ""
@@ -154,7 +237,18 @@ class UI:
 
     @classmethod
     def visible_len(cls, text):
-        return len(cls.ansi_pattern.sub("", str(text)))
+        text = cls.ansi_pattern.sub("", str(text))
+        return sum(cls.char_width(character) for character in text)
+
+    @classmethod
+    def char_width(cls, character):
+        if unicodedata.combining(character):
+            return 0
+        if unicodedata.category(character) in {"Cf", "Mn", "Me"}:
+            return 0
+        if unicodedata.east_asian_width(character) in {"F", "W"}:
+            return 2
+        return 1
 
     @classmethod
     def fit_panel_line(cls, text, width):
@@ -204,7 +298,7 @@ class UI:
                 if match:
                     index = match.end()
                     continue
-            visible += 1
+            visible += cls.char_width(text[index])
             index += 1
         return text[:index], text[index:]
 
@@ -232,6 +326,182 @@ class UI:
         return [top, *body, bottom]
 
     @classmethod
+    def fit_box_line(cls, text, width, border_color="cyan"):
+        text = str(text)
+        content_width = max(1, width - 4)
+        if cls.visible_len(text) > content_width:
+            plain = cls.ansi_pattern.sub("", text)
+            text = plain[: max(0, content_width - 3)] + "..."
+        padding = " " * max(0, content_width - cls.visible_len(text))
+        return (
+            cls.paint("│", border_color, bold=True)
+            + f" {text}{padding} "
+            + cls.paint("│", border_color, bold=True)
+        )
+
+    @classmethod
+    def box(
+        cls,
+        title,
+        lines,
+        width=24,
+        border_color="cyan",
+        title_color=None,
+        wrap=False,
+    ):
+        width = max(18, width)
+        title_color = title_color or border_color
+        title_text = f" {cls.paint(title, title_color, bold=True)} "
+        top_fill = max(0, width - cls.visible_len(title_text) - 2)
+        top = (
+            cls.paint("┌", border_color, bold=True)
+            + title_text
+            + cls.paint("─" * top_fill + "┐", border_color, bold=True)
+        )
+        body_text = []
+        for line in lines:
+            if wrap:
+                body_text.extend(cls.wrap_panel_line(line, width))
+            else:
+                body_text.append(line)
+        body = [cls.fit_box_line(line, width, border_color) for line in body_text]
+        bottom = cls.paint("└" + "─" * (width - 2) + "┘", border_color, bold=True)
+        return [top, *body, bottom]
+
+    @classmethod
+    def title_box(cls, width=42, border_color="magenta", phase=None):
+        width = max(34, width)
+        content_width = width - 2
+        phase_key = str(phase or "").lower()
+        phase_titles = (
+            ("resolution", "cannons roar"),
+            ("convoy", "convoys inbound"),
+            ("supply", "stores and strain"),
+            ("labor", "hammers in port"),
+            ("buy", "market tides"),
+            ("orders", "hidden orders"),
+            ("command", "captain's table"),
+        )
+        subtitle = next(
+            (title for key, title in phase_titles if key in phase_key),
+            "hidden orders",
+        )
+
+        def center_line(parts):
+            text = "".join(parts)
+            padding = max(0, content_width - cls.visible_len(text))
+            left = padding // 2
+            right = padding - left
+            return (
+                cls.paint("║", border_color, bold=True)
+                + " " * left
+                + text
+                + " " * right
+                + cls.paint("║", border_color, bold=True)
+            )
+
+        return [
+            cls.paint("╔" + "═" * content_width + "╗", border_color, bold=True),
+            center_line(
+                [
+                    cls.paint("◈", "cyan", bold=True),
+                    "     ",
+                    cls.paint("S E A L E D   O R D E R S", "yellow", bold=True),
+                ]
+            ),
+            center_line(
+                [
+                    cls.paint("⚓", "blue", bold=True),
+                    "  ",
+                    cls.paint(subtitle, "white", bold=True),
+                    "  ",
+                    cls.paint("⚓", "blue", bold=True),
+                ]
+            ),
+            center_line([cls.paint("open seas", "green"), cls.muted(" · sealed fates")]),
+            cls.paint("╚" + "═" * content_width + "╝", border_color, bold=True),
+        ]
+
+    @classmethod
+    def phase_color(cls, phase):
+        phase = str(phase).lower()
+        if "resolution" in phase:
+            return "red"
+        if "convoy" in phase:
+            return "yellow"
+        if "supply" in phase:
+            return "orange"
+        if "labor" in phase:
+            return "blue"
+        if "buy" in phase:
+            return "green"
+        if "orders" in phase:
+            return "yellow"
+        if "command" in phase:
+            return "magenta"
+        return "magenta"
+
+    @classmethod
+    def game_header(
+        cls,
+        month,
+        phase,
+        turn,
+        max_turns,
+        submitted=0,
+        total_players=2,
+        order_lines=None,
+        columns=None,
+    ):
+        width = columns or 96
+        content_width = min(max(80, width), 150)
+        gap = 2
+        stacked = content_width < 96
+        if stacked:
+            status_width = (content_width - gap) // 2
+            orders_width = content_width - status_width - gap
+            title_width = content_width
+        else:
+            status_width = max(31, min(40, int(content_width * 0.28)))
+            orders_width = max(29, min(34, int(content_width * 0.24)))
+            title_width = content_width - status_width - orders_width - gap * 2
+        phase_color = cls.phase_color(phase)
+        status = cls.box(
+            "Status",
+            [
+                f"{cls.label('Month:')} {month}",
+                f"{cls.label('Phase:')} {cls.paint(str(phase).upper(), phase_color, bold=True)}",
+                f"{cls.label('Turn:')} {turn} / {max_turns}",
+            ],
+            width=status_width,
+            border_color=phase_color,
+            wrap=True,
+        )
+        title = cls.title_box(title_width, border_color=phase_color, phase=phase)
+        order_lines = order_lines or [cls.muted("No current orders")]
+        orders = cls.box(
+            "Orders",
+            order_lines,
+            width=orders_width,
+            border_color=phase_color,
+            wrap=True,
+        )
+        target_height = max(len(status), len(title), len(orders))
+        while len(status) < target_height:
+            status.insert(-1, cls.fit_box_line("", status_width, phase_color))
+        while len(orders) < target_height:
+            orders.insert(-1, cls.fit_box_line("", orders_width, phase_color))
+
+        rows = []
+        left_title = cls.combine_panels(status, title, gap=gap)
+        for index, row in enumerate(left_title):
+            order_line = orders[index] if index < len(orders) else " " * orders_width
+            rows.append(f"{row}{' ' * gap}{order_line}")
+        if stacked:
+            return [*title, *cls.combine_panels(status, orders, gap=gap)]
+        return rows
+
+    @classmethod
     def combine_panels(cls, left, right, gap=2):
         height = max(len(left), len(right))
         left_width = max(cls.visible_len(line) for line in left) if left else 0
@@ -254,7 +524,7 @@ class UI:
 
 
 class Rules:
-    VERSION = "0.45"
+    VERSION = "0.48"
     STARTING_GOLD = 10
     STARTING_SHIPS = 3
     TRADE_INCOME = 2
@@ -506,22 +776,22 @@ class Nation:
                 f"{UI.amount(self.ships, 'ships')}  "
                 f"{UI.amount(self.asset_score, 'assets', 'yellow')}"
             ),
-            f"Treasure: {UI.amount(self.treasure_value, 'gold', 'yellow')}{self.treasure_status}",
-            f"Payroll: {self.payroll_status}",
-            f"Yard: {self.shipyard_status}",
-            f"Fort: {self.fort_status}",
-            f"Guild: {self.trade_guild_status}",
-            f"Fishing: {self.fishing_status}",
-            f"Dockhouse: {self.dockhouse_status}",
-            f"Dock hands: {self.dockhand_status}",
-            f"Supply: {self.supply_status}",
-            f"Raid: {self.raid_fatigue_status}",
-            f"Port defences: {self.port_defense_status}",
-            f"Dry dock: {self.dry_dock_status}",
-            f"Admiralty: {self.admiralty_status}",
-            f"Admirals: {self.admiral_status}",
-            f"Fire: {self.fire_ship_status}",
-            f"Captains: {self.guard_captain_status}",
+            f"{UI.symbol_label('Treasure', 'Treasure', 'yellow')}: {UI.amount(self.treasure_value, 'gold', 'yellow')}{self.treasure_status}",
+            f"{UI.symbol_label('Payroll', 'Payroll', 'blue')}: {self.payroll_status}",
+            f"{UI.symbol_label('Yard', 'Yard', 'green')}: {self.shipyard_status}",
+            f"{UI.symbol_label('Fort', 'Fort', 'yellow')}: {self.fort_status}",
+            f"{UI.symbol_label('Guild', 'Guild', 'green')}: {self.trade_guild_status}",
+            f"{UI.symbol_label('Fishing', 'Fishing', 'blue')}: {self.fishing_status}",
+            f"{UI.symbol_label('Dockhouse', 'Dockhouse', 'yellow')}: {self.dockhouse_status}",
+            f"{UI.symbol_label('Dock hands', 'Hands', 'yellow')}: {self.dockhand_status}",
+            f"{UI.symbol_label('Supply', 'Supply', 'cyan')}: {self.supply_status}",
+            f"{UI.symbol_label('Raid', 'Raid', 'orange')}: {self.raid_fatigue_status}",
+            f"{UI.symbol_label('Port', 'Port def', 'blue')}: {self.port_defense_status}",
+            f"{UI.symbol_label('Dry dock', 'Dry dock', 'cyan')}: {self.dry_dock_status}",
+            f"{UI.symbol_label('Admiralty', 'Admiralty', 'white')}: {self.admiralty_status}",
+            f"{UI.symbol_label('Admirals', 'Admirals', 'white')}: {self.admiral_status}",
+            f"{UI.symbol_label('Fire', 'Fire', 'red')}: {self.fire_ship_status}",
+            f"{UI.symbol_label('Captains', 'Captains', 'magenta')}: {self.guard_captain_status}",
         ]
 
     @property
@@ -870,7 +1140,7 @@ class Nation:
         elif self.supply >= 4:
             bonuses.append("needs guild for +5")
         if self.supply >= 5:
-            bonuses.append("trade ships +1 gold")
+            bonuses.append(f"trade ships +{UI.amount(1, 'gold', 'yellow')}")
         if bonuses:
             status += f", {', '.join(bonuses)}"
         if self.last_supply_events:
@@ -1117,7 +1387,7 @@ class Nation:
     def payroll_status(self):
         if self.has_payroll_at_sea:
             return (
-                f"{self.payroll_value} gold at sea, arrives in "
+                f"{UI.payroll_gold(self.payroll_value)} at sea, arrives in "
                 f"{self.payroll_turns_remaining} turn(s)"
             )
         if self.payroll_launched:
@@ -1129,94 +1399,90 @@ class Nation:
     @property
     def shipyard_status(self):
         if self.shipyard_completed:
-            return f"completed, ships cost {self.ship_cost} gold"
+            return f"{UI.symbol('complete')} completed, ships cost {UI.amount(self.ship_cost, 'gold', 'yellow')}"
         if self.shipyard_started:
             return (
-                "under construction, "
-                f"{UI.progress(self.shipyard_labor, Rules.SHIPYARD_LABOR_REQUIRED)} labor"
+                f"{UI.symbol('started')} building, "
+                f"{UI.progress(self.shipyard_labor, Rules.SHIPYARD_LABOR_REQUIRED)} {UI.symbol('labor')}"
             )
         if self.shipyard_destroyed:
-            return f"burned down ({Rules.SHIPYARD_COST} gold to rebuild)"
+            return f"{UI.symbol('warning')} burned ({UI.amount(Rules.SHIPYARD_COST, 'gold', 'yellow')} rebuild)"
         return (
-            f"not started ({Rules.SHIPYARD_COST} gold, "
-            f"{Rules.SHIPYARD_LABOR_REQUIRED} labor)"
+            f"{UI.symbol('locked')} not started ({UI.cost(Rules.SHIPYARD_COST, Rules.SHIPYARD_LABOR_REQUIRED)})"
         )
 
     @property
     def fort_status(self):
         if self.fort_completed:
             return (
-                "completed, blocks "
-                f"{Rules.FORT_RAID_BLOCKS_PER_TURN} raid ship(s)"
+                f"{UI.symbol('complete')} completed, blocks "
+                f"{UI.amount(Rules.FORT_RAID_BLOCKS_PER_TURN, 'ships')} raid"
             )
         if self.fort_started:
             return (
-                "under construction, "
-                f"{UI.progress(self.fort_labor, Rules.FORT_LABOR_REQUIRED)} labor"
+                f"{UI.symbol('started')} building, "
+                f"{UI.progress(self.fort_labor, Rules.FORT_LABOR_REQUIRED)} {UI.symbol('labor')}"
             )
-        return f"not started ({Rules.FORT_COST} gold, {Rules.FORT_LABOR_REQUIRED} labor)"
+        return f"{UI.symbol('locked')} not started ({UI.cost(Rules.FORT_COST, Rules.FORT_LABOR_REQUIRED)})"
 
     @property
     def trade_guild_status(self):
         if self.trade_guild_completed:
             if self.administrator_hired:
                 return (
-                    "completed, administrator active "
+                    f"{UI.symbol('complete')} completed, administrator active "
                     f"(war chest {self.supply_warchest_markup}x, "
                     f"+{Rules.ADMINISTRATOR_PAYROLL_COST} payroll)"
                 )
             return (
-                "completed, administrator available "
-                f"({Rules.ADMINISTRATOR_COST} gold, "
+                f"{UI.symbol('complete')} completed, administrator available "
+                f"({UI.amount(Rules.ADMINISTRATOR_COST, 'gold', 'yellow')}, "
                 f"+{Rules.ADMINISTRATOR_PAYROLL_COST} payroll)"
             )
         if self.trade_guild_started:
             return (
-                "under construction, "
-                f"{UI.progress(self.trade_guild_labor, Rules.TRADE_GUILD_LABOR_REQUIRED)} labor"
+                f"{UI.symbol('started')} building, "
+                f"{UI.progress(self.trade_guild_labor, Rules.TRADE_GUILD_LABOR_REQUIRED)} {UI.symbol('labor')}"
             )
         return (
-            f"not started ({Rules.TRADE_GUILD_COST} gold, "
-            f"{Rules.TRADE_GUILD_LABOR_REQUIRED} labor)"
+            f"{UI.symbol('locked')} not started ({UI.cost(Rules.TRADE_GUILD_COST, Rules.TRADE_GUILD_LABOR_REQUIRED)})"
         )
 
     @property
     def fishing_status(self):
         if self.fishing_dock_started and not self.fishing_dock_built:
             return (
-                "docks under construction, "
+                f"{UI.symbol('started')} docks building, "
                 f"{UI.progress(self.fishing_dock_labor, Rules.FISHING_DOCK_LABOR_REQUIRED)} "
-                "labor, 0 boats"
+                f"{UI.symbol('labor')}, 0 boats"
             )
         if not self.fishing_dock_built:
             return (
-                f"no docks ({Rules.FISHING_DOCK_COST} gold, "
-                f"{Rules.FISHING_DOCK_LABOR_REQUIRED} labor), 0 boats"
+                f"{UI.symbol('locked')} no docks ({UI.cost(Rules.FISHING_DOCK_COST, Rules.FISHING_DOCK_LABOR_REQUIRED)}), 0 boats"
             )
         if self.fishing_dock_disabled:
             return (
-                f"docks disabled ({Rules.FISHING_DOCK_COST} gold repair), "
+                f"{UI.symbol('warning')} docks disabled ({UI.amount(Rules.FISHING_DOCK_COST, 'gold', 'yellow')} repair), "
                 f"{self.fishing_boats} boat(s), 0 income"
             )
         return (
-            f"docks active, {self.fishing_boats} boat(s), "
-            f"+{self.fishing_income} gold/turn"
+            f"{UI.symbol('complete')} docks active, {self.fishing_boats} boat(s), "
+            f"+{UI.amount(self.fishing_income, 'gold', 'yellow')}/turn"
         )
 
     @property
     def dockhouse_status(self):
         if self.dockhouse_completed:
-            return "completed"
+            return f"{UI.symbol('complete')} completed"
         if self.dockhouse_started:
             return (
-                "under construction, "
-                f"{UI.progress(self.dockhouse_labor, Rules.DOCKHOUSE_LABOR_REQUIRED)} labor"
+                f"{UI.symbol('started')} building, "
+                f"{UI.progress(self.dockhouse_labor, Rules.DOCKHOUSE_LABOR_REQUIRED)} {UI.symbol('labor')}"
             )
         if self.dockhouse_burned:
-            return f"burned ({Rules.DOCKHOUSE_COST} gold, {Rules.DOCKHOUSE_LABOR_REQUIRED} labor)"
+            return f"{UI.symbol('warning')} burned ({UI.cost(Rules.DOCKHOUSE_COST, Rules.DOCKHOUSE_LABOR_REQUIRED)})"
         return (
-            f"not started ({Rules.DOCKHOUSE_COST} gold, "
-            f"{Rules.DOCKHOUSE_LABOR_REQUIRED} labor)"
+            f"{UI.symbol('locked')} not started ({UI.cost(Rules.DOCKHOUSE_COST, Rules.DOCKHOUSE_LABOR_REQUIRED)})"
         )
 
     @property
@@ -1240,15 +1506,15 @@ class Nation:
                     boats = 2 if self.dry_dock_completed else 1
                     duty = f"boats {Rules.DOCKHAND_BOATWRIGHT_COST}g each x{boats}"
             else:
-                duty = f"construction +{self.dockhand_construction_labor} labor"
+                duty = f"construction +{self.dockhand_construction_labor} {UI.symbol('labor')}"
             return f"{count}, {duty}, {upkeep}"
-        return f"{count}, construction +{self.dockhand_construction_labor} labor, {upkeep}"
+        return f"{count}, construction +{self.dockhand_construction_labor} {UI.symbol('labor')}, {upkeep}"
 
     @property
     def fire_ship_status(self):
         if self.fire_ships_unlocked:
             return "available"
-        return f"locked ({Rules.FIRE_SHIP_UPGRADE_COST} gold upgrade)"
+        return f"{UI.symbol('locked')} locked ({UI.amount(Rules.FIRE_SHIP_UPGRADE_COST, 'gold', 'yellow')} upgrade)"
 
     @property
     def guard_captain_status(self):
@@ -1262,7 +1528,7 @@ class Nation:
 
         if self.guard_captains >= Rules.GUARD_CAPTAIN_SHIP_CAPTURE_THRESHOLD:
             capstone = (
-                "captures 1 smuggling ship instead of confiscating gold"
+                f"captures {UI.amount(1, 'ships')} smuggler instead of {UI.smuggle_gold(1)}"
             )
         else:
             needed = Rules.GUARD_CAPTAIN_SHIP_CAPTURE_THRESHOLD - self.guard_captains
@@ -1274,10 +1540,10 @@ class Nation:
         defense = self.guard_captain_port_defense
         if defense:
             return (
-                f"{status}, confiscates {confiscations} smuggle gold, "
+                f"{status}, confiscates {UI.smuggle_gold(confiscations)} smuggle, "
                 f"+{defense} port defense, {capstone}"
             )
-        return f"{status}, confiscates {confiscations} smuggle gold, {capstone}"
+        return f"{status}, confiscates {UI.smuggle_gold(confiscations)} smuggle, {capstone}"
 
     @property
     def raid_fatigue_status(self):
@@ -1285,36 +1551,34 @@ class Nation:
         return (
             f"{self.damaged_ships} damaged ship(s), "
             f"{UI.progress(progress, Rules.RAID_ACTIONS_PER_DAMAGE, mode='inverted')} toward next damage, "
-            f"repair {self.raid_repair_cost} gold each"
+            f"repair {UI.amount(self.raid_repair_cost, 'gold', 'yellow')} each"
         )
 
     @property
     def dry_dock_status(self):
         if self.dry_dock_completed:
-            return "completed, raid repairs are free"
+            return f"{UI.symbol('complete')} completed, raid repairs free"
         if self.dry_dock_started:
             return (
-                "under construction, "
-                f"{UI.progress(self.dry_dock_labor, Rules.DRY_DOCK_LABOR_REQUIRED)} labor"
+                f"{UI.symbol('started')} building, "
+                f"{UI.progress(self.dry_dock_labor, Rules.DRY_DOCK_LABOR_REQUIRED)} {UI.symbol('labor')}"
             )
         return (
-            f"not started ({Rules.DRY_DOCK_COST} gold, "
-            f"{Rules.DRY_DOCK_LABOR_REQUIRED} labor, requires shipyard)"
+            f"{UI.symbol('locked')} not started ({UI.cost(Rules.DRY_DOCK_COST, Rules.DRY_DOCK_LABOR_REQUIRED)}, requires shipyard)"
         )
 
     @property
     def admiralty_status(self):
         if self.admiralty_completed:
             overtime = "overtime used" if self.admiralty_overtime_used else "overtime ready"
-            return f"completed, {overtime}"
+            return f"{UI.symbol('complete')} completed, {overtime}"
         if self.admiralty_started:
             return (
-                "under construction, "
-                f"{UI.progress(self.admiralty_labor, Rules.ADMIRALTY_LABOR_REQUIRED)} labor"
+                f"{UI.symbol('started')} building, "
+                f"{UI.progress(self.admiralty_labor, Rules.ADMIRALTY_LABOR_REQUIRED)} {UI.symbol('labor')}"
             )
         return (
-            f"not started ({Rules.ADMIRALTY_COST} gold, "
-            f"{Rules.ADMIRALTY_LABOR_REQUIRED} labor)"
+            f"{UI.symbol('locked')} not started ({UI.cost(Rules.ADMIRALTY_COST, Rules.ADMIRALTY_LABOR_REQUIRED)})"
         )
 
     @property

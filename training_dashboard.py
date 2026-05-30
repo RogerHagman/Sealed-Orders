@@ -28,6 +28,16 @@ COLORS = {
 
 
 def paint(text, color=None, bold=False):
+    """
+    Apply ANSI color codes to the given text if color is specified and output is a terminal. 
+    Supported colors include: red, green, yellow, blue, magenta, cyan, white, and dim. 
+    If bold is True, the text will be rendered in bold. 
+    If COLOR_ENABLED is False, the text will be returned without modification.
+    Args:        text (str): The text to be colored.
+        color (str, optional): The name of the color to apply. Defaults to None.
+    Returns:
+        str: The text with ANSI color codes applied if applicable.
+    """
     if not COLOR_ENABLED:
         return text
     codes = []
@@ -44,6 +54,13 @@ ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
 def visible_len(text):
+    """
+    Calculate the visible length of a string by removing ANSI escape codes.
+    Args:
+        text (str): The input string that may contain ANSI escape codes.
+    Returns:
+        int: The visible length of the string.
+    """
     return len(ANSI_RE.sub("", str(text)))
 
 

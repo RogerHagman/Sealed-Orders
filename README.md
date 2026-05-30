@@ -264,7 +264,7 @@
 - Added a national supply meter from `-5` to `+5`, checked after income and convoy arrivals.
 - Fleet supply need is `ceil(ships / 4)`; trade, raid steals, treasure arrivals, and half fishing income count toward supply coverage.
 - Meeting supply need can stabilize or raise supply, while shortages reduce it. Once supply is already strained, further shortages step down more slowly.
-- The war chest no longer covers shortages automatically. It cannot cover the opening January resolution: the first treasure fleet is only released after the outbreak of war. From later Supply steps onward, if a nation is already below 0 supply and then misses sea-income need, the bulletin board may offer emergency stores from the war chest at 4 gold per missing supply point.
+- The war chest cannot cover the opening January resolution: the first treasure fleet is only released after the outbreak of war. From later Supply steps onward, if a nation is already below 0 supply and then misses sea-income need, emergency stores are bought automatically at the current war chest rate per missing supply point.
 - A completed trade guild can hire an Administrator for 3 gold. Administrators add 1 payroll and reduce war-chest supply cover to 3 gold per missing supply point.
 - Added Dockhouse, a civilian labor building costing 4 gold and 2 labor. Completed Dockhouses count as 6 asset value and unlock Dock Hands.
 - Dock Hands cost 2 gold each, cap at 5, add 1 payroll and 1 supply need each, and do not count as ships, assets, or port defense.
@@ -273,6 +273,18 @@
 - At negative supply, enemy smugglers earn full trade income. Deeper shortages only trigger damage, desertion, burned infrastructure, or fishing disruption when that month also misses supply need.
 - `+4` and `+5` require strong real surplus, and `+5` requires a completed trade guild. At `+4` and `+5`, completed trade guilds are twice as effective. At `+5`, completed trade ships also earn 1 extra gold each.
 - Training and benchmark output now tracks supply, supply crises, desertions, and unrest burns.
+
+## Version 0.48
+
+- Revamped the terminal interface with compact nautical/resource symbols, phase-colored header panes, and cleaner control menus.
+- Added contextual `Selected` panels for orders, buy actions, dockhand duty, overtime, and amount pickers so explanations move out of dense menu rows.
+- Header status now shows `Turn X/Y`; the Orders pane shows live allocation summaries during orders and the latest completed purchase during Buy Phase.
+- Harbor State now uses compact icons for gold, ships, assets, labor, supply, projects, captains, and admirals.
+- Emergency war chest supply cover is automatic once the below-zero supply trigger applies, with a clear rate-and-cost bulletin.
+- Added the main menu with `Seamanship's Manual`, `Human Records`, and `Bot Meta` reference screens.
+- `Seamanship's Manual` presents deeper rules, live constants, costs, labor requirements, and advanced statistics.
+- `Human Records` summarizes human-vs-AI logs with total win rate, per-bot records, and opening allocations used.
+- `Bot Meta` summarizes the current AI roster with weight profiles, build priorities, traits, human-log performance, and colored opponent flavor text.
 
 ## Bot Meta Notes
 
