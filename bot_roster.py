@@ -1,8 +1,29 @@
+# bot_roster.py
+"""Module for managing the default bot strategies.
+This module defines a set of default bot strategies with various playstyles and parameters. 
+It also provides functions to retrieve the list of strategy names and to find a strategy by name.
+Key components include:
+- BotStrategy: A class representing a bot's strategy, including build priorities and weight fields.
+- default_bot_strategies: A function that returns a list of predefined BotStrategy 
+instances representing different bot playstyles.
+- strategy_names: A function that returns a list of the names of the default bot strategies.
+- find_strategy: A function that takes a strategy name as input and returns the corresponding 
+BotStrategy instance from the default roster, or raises a ValueError if the name is not found.
+"""
+
+
+# Imports
 from bot_strategy import BotStrategy
 from bot_openings import HUMAN_WON_OPENING_BOOK, NASH_CORE_OPENING_BOOK
 
 
 def default_bot_strategies():
+    """
+    Each BotStrategy includes parameters such as trade_weight, raid_weight, guard_weight, fire_weight, build_priority, and various biases that influence the bot's decision-making during the game. Some strategies also include an opening_book that defines specific actions for the early turns of the game.
+    
+    Returns:
+        list: A list of BotStrategy instances, each representing a different bot strategy with unique parameters and playstyle.
+    """
     return [
         BotStrategy(
             name="Merchant",
@@ -114,36 +135,57 @@ def default_bot_strategies():
         ),
         BotStrategy(
             name="Human Shadow",
-            trade_weight=5.0,
-            raid_weight=1.65,
-            guard_weight=1.35,
-            fire_weight=0.05,
+
+            trade_weight=3.25,
+            raid_weight=3.85,
+            guard_weight=2.15,
+            fire_weight=2.75,
+
             build_priority=[
                 "shipyard",
-                "fishing_dock",
-                "trade_guild",
-                "fishing_boat",
                 "guard_captain",
-                "fire_plans",
+                "trade_guild",
+                "fishing_dock",
+                "fishing_boat",
                 "fort",
+                "fire_plans",
+                "dockhouse",
+                "administrator",
                 "dry_dock",
+                "admiralty",
+                "admiral",
             ],
-            convoy_bias=0.6,
+
+            convoy_bias=0.74,
             ship_bias=0.92,
-            shipyard_bias=0.78,
-            fort_bias=0.32,
+
+            shipyard_bias=0.82,
+            fort_bias=0.54,
             trade_guild_bias=0.68,
-            fishing_dock_bias=0.82,
-            fishing_boat_bias=0.86,
-            guard_captain_bias=0.58,
-            fire_plans_bias=0.48,
-            dry_dock_bias=0.18,
-            admiralty_bias=0.08,
-            admiral_bias=0.05,
-            overtime_bias=0.08,
-            repair_bias=0.7,
-            construction_idle_bias=0.8,
-            opening_book=HUMAN_WON_OPENING_BOOK,
+            administrator_bias=0.52,
+
+            guard_captain_bias=0.64,
+            fire_plans_bias=0.58,
+
+            fishing_dock_bias=0.48,
+            fishing_boat_bias=0.42,
+
+            dockhouse_bias=0.36,
+            dockhand_bias=0.30,
+            dockhand_repair_bias=0.34,
+            dockhand_boatwright_bias=0.45,
+
+            dry_dock_bias=0.44,
+            admiralty_bias=0.36,
+            admiral_bias=0.24,
+            overtime_bias=0.38,
+
+            repair_bias=0.48,
+            construction_idle_bias=0.10,
+
+            adaptive=True,
+            adaptation_strength=0.75,
+            adaptation_turns=3,
         ),
         BotStrategy(
             name="Tide Reader",
@@ -461,6 +503,59 @@ def default_bot_strategies():
             fishing_boat_bias=0.90,
             construction_idle_bias=0.46,
         ),
+        BotStrategy(
+
+            name="Gray Admiralty",
+
+            trade_weight=3.0536330290457863,
+            raid_weight=2.9059088637605175,
+            guard_weight=2.693119153745268,
+            fire_weight=3.3294622865948718,
+
+            build_priority=[
+                "dockhand",
+                "guard_captain",
+                "administrator",
+                "fishing_dock",
+                "fire_plans",
+                "fishing_boat",
+                "dockhouse",
+                "admiralty",
+                "admiral",
+                "dry_dock",
+            ],
+
+            convoy_bias=0.9882523832598497,
+            ship_bias=0.9560966965718832,
+
+            shipyard_bias=0.060021254355232624,
+            fort_bias=0.5017330941367448,
+            trade_guild_bias=0.11200618577408271,
+            administrator_bias=0.7702884103053237,
+
+            guard_captain_bias=0.2025532728899971,
+            fire_plans_bias=0.4305579223840103,
+
+            fishing_dock_bias=0.3833657187764549,
+            fishing_boat_bias=0.18592590841399306,
+
+            dockhouse_bias=0.4233609121210691,
+            dockhand_bias=0.5312021477638436,
+            dockhand_repair_bias=0.13146267943065365,
+            dockhand_boatwright_bias=0.8993476153729102,
+
+            dry_dock_bias=0.4071141891002335,
+            admiralty_bias=0.7671120240063621,
+            admiral_bias=0.35779045206618576,
+            overtime_bias=0.8430932269120164,
+
+            repair_bias=0.5792499555209782,
+            construction_idle_bias=0.23604171342371918,
+
+            adaptive=False,
+            adaptation_strength=0.0,
+            adaptation_turns=3,
+),
     ]
 
 
@@ -469,6 +564,11 @@ def strategy_names():
 
 
 def find_strategy(name):
+    """Find a BotStrategy by name from the default roster.
+    Args:    name (str): The name of the strategy to find. The search is case-insensitive and ignores leading/trailing whitespace.
+    Returns:    BotStrategy: The BotStrategy instance with the matching name.
+    Raises:    ValueError: If no strategy with the given name is found in the default roster, with a message listing the available strategy names.
+    """
     normalized_name = name.strip().lower()
     for strategy in default_bot_strategies():
         if strategy.name.lower() == normalized_name:

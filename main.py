@@ -1,14 +1,24 @@
+# main.py
+"""Sealed Orders: a 2-player strategy game of naval warfare and intrigue."""
+
+# Imports
 import argparse
 import sys
-
 from game_engine import Game
 from game_state import Allocation, Rules, UI
 
+
 if __name__ == "__main__":
+    """Expose main module attributes for interactive use and testing."""
     sys.modules["main"] = sys.modules[__name__]
 
 
 def prompt_player_names():
+    """
+    Prompt the user to enter player names, with defaults for convenience.
+    Returns:
+        A list of two player names.
+    """
     names = []
     defaults = ["England", "Spain"]
 
@@ -22,11 +32,20 @@ def prompt_player_names():
 
 
 def prompt_human_name():
+    """Prompt the user to enter their nation name for a human-vs-AI game."""
     name = input("Your nation name [England]: ").strip()
     return name or "England"
 
 
 def prompt_ai_strategy(strategy_names):
+    """
+    Prompt the user to choose an AI strategy from the bot roster.
+    
+    Args:
+        strategy_names: a list of available strategy names to choose from
+        Returns:
+            The chosen AI strategy name.
+    """
     default_strategy = "Privateer"
     UI.section("CHOOSE AI OPPONENT", "magenta")
     for index, strategy_name in enumerate(strategy_names, start=1):
@@ -54,7 +73,22 @@ def prompt_ai_strategy(strategy_names):
 
 
 if __name__ == "__main__":
+    """Main entry point for command-line play and bot training/simulation.
+    Run with --help for available options.
+    
+        Examples:
+        - Play a human-vs-AI game with a menu choice of AI opponent:
+            python main.py --play-ai
+        - Train an evolving strategy for 50 generations with 10 games per bot:
+            python main.py --train-evolving 50 --training-games 10
+        - Summarize recorded human-vs-AI games from a log file:
+            python main.py --ai-log-summary --ai-log artifacts/logs/ai_game_log.jsonl
+        - Benchmark an evolved strategy against the bot roster for 100 games per opponent:
+            python main.py --evaluate-strategy evolved_strategy.json --eval-games 100
+    """
     UI.prepare_terminal()
+    
+    # Flag parsing for both play and training modes
     parser = argparse.ArgumentParser(description="Play or simulate Sealed Orders.")
     parser.add_argument(
         "--play-ai",
@@ -206,12 +240,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.max_turns is not None:
+        # Experimental option to override the default 24-turn game length for testing purposes.
         try:
             Rules.set_max_turns(args.max_turns)
         except ValueError as error:
             parser.error(str(error))
 
     if args.evaluate_strategy is not None:
+        # Benchmark a strategy file against the bot roster and output results.
         from bot_playtest import evaluate_strategy_file
 
         evaluate_strategy_file(
@@ -222,19 +258,22 @@ if __name__ == "__main__":
             workers=args.eval_workers,
         )
     elif args.train_evolving is not None:
+        # Train an evolving strategy against the bot roster and output results.
         from bot_playtest import train_evolving_strategy
         from bot_roster import find_strategy
         from bot_strategy import load_strategy
 
         initial_strategy = None
         if args.train_start_strategy:
+            # Allow starting from either a named bot roster strategy or a custom strategy JSON file.
             try:
                 initial_strategy = find_strategy(args.train_start_strategy)
             except ValueError:
                 initial_strategy = load_strategy(args.train_start_strategy)
 
         train_evolving_strategy(
-            generations=args.train_evolving,
+            # TODO: consider refactoring this function to take a config object instead of a long parameter list
+            generations=args.train_evolving, 
             games_per_bot=args.training_games,
             learning_rate=args.learning_rate,
             mutation_scale=args.mutation_scale,
@@ -253,6 +292,7 @@ if __name__ == "__main__":
             workers=args.training_workers,
         )
     elif args.ai_log_summary:
+        # Summarize recorded human-vs-AI games from a log file and output results.
         from bot_playtest import summarize_ai_games
 
         summarize_ai_games(log_path=args.ai_log)

@@ -1,3 +1,12 @@
+# bot_playtest.py
+
+# This module contains functions for testing and evaluating bot strategies through playtesting, benchmarking, and training. It includes functionality for running games against the AI, summarizing results, and training evolving strategies.
+# Key components include:
+# - BotStrategy: A class representing a bot's strategy, including build priorities and weight fields.
+# - PlayVsAIGame and SelfPlayGame: Classes for simulating games against the AI and self-play scenarios.
+# - Benchmarking functions to evaluate strategy performance against a roster of opponents.
+# - Training functions to evolve strategies over multiple generations based on performance metrics.
+
 from bot_strategy import (
     BOT_WEIGHT_FIELDS,
     BUILD_PROJECTS,

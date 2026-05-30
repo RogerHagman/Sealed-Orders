@@ -1,3 +1,26 @@
+# bot_runtime.py
+"""This module contains classes and functions for running games against the AI and simulating self-play scenarios. 
+It includes functionality for recording game details, summarizing results, and integrating with bot strategies during gameplay. 
+Key components include the PlayVsAIGame and SelfPlayGame classes, as well as functions for recording and summarizing AI game outcomes.
+
+Classes:
+- SelfPlayGame: A class for simulating games between two bot strategies without human interaction, used for benchmarking and training.
+- PlayVsAIGame: A class for simulating a game between a human player and an AI bot, including functionality for prompting the human for input and recording the
+  game details.
+  Functions:
+  - play_vs_ai: A function to run a game against the AI using a specified strategy and record the results.
+  - summarize_ai_games: A function to read recorded AI game logs and summarize the outcomes by strategy.
+  - write_ai_game_record: A function to write a detailed record of an AI game to a log file in JSON format.
+  - build_ai_game_record: A function to construct a structured record of an AI game, including player details, game outcome, and turn-by-turn snapshots.
+  - ai_game_winner: A function to determine the winner of an AI game based on the game state.
+  - ai_game_win_type: A function to determine the type of win (port kill, asset victory, or draw) in an AI game.
+  - player_record: A function to create a structured record of a player's state at the end of an AI game, including resources
+    and assets.
+  - snapshot_record: A function to create a structured record of the game state at a specific snapshot, including player details and allocations.
+  - value_record: A helper function to convert complex values (like Allocations) into a serializable format for recording.
+"""
+
+# Imports
 import contextlib
 import io
 import json
@@ -15,6 +38,18 @@ AI_GAME_LOG_PATH = Path("artifacts/logs/ai_game_log.jsonl")
 
 
 class SelfPlayGame(Game):
+    """Simulates a game between two bot strategies without human interaction, used for benchmarking and training. The game runs silently without printing output, and returns a structured result at the end.
+    Attributes:
+    - player_names (list): A list of two strings representing the names of the players (e.g., "Bot A" and "Bot B").
+    - strategies (list): A list of two BotStrategy instances representing the strategies used by each bot player.
+    - rng (random.Random): A random number generator instance used for any stochastic decisions made by the bot strategies during the game.
+    Methods:
+    - play_silent(): Runs the game without printing any output, simulating turns until the game ends. Returns a structured result containing the winner, win type, turns taken, final scores, and ships for each player.
+    - play_bot_turn(): Executes a single turn for both bot players, including choosing allocations, observing opponent openings, resolving orders, advancing convoys, applying supply and port labor, and running the buy phase for each bot strategy.
+    - result(): Determines the winner of the game based on the final game state, including checking for port destruction and comparing asset scores. Returns a dictionary containing the winner index, win type, turns taken, final scores, and ships for each player.
+    - clear_between_players(): A placeholder method that can be used to clear any temporary state between player turns if needed.
+    - wants_emergency_supply_warchest(): A method that allows bot strategies to decide whether they want to use an emergency supply warchest based on the current game state and their strategy's logic.
+    """
     def __init__(self, player_names, strategies, rng):
         super().__init__(player_names)
         self.strategies = strategies
@@ -84,6 +119,7 @@ class SelfPlayGame(Game):
         pass
 
     def wants_emergency_supply_warchest(
+        # TODO: Likely to be legacy with the enforced autopay system below 0 supply
         self,
         player,
         need,
@@ -102,7 +138,29 @@ class SelfPlayGame(Game):
 
 
 class PlayVsAIGame(Game):
+    """ 
+    Simulates a game between a human player and an AI bot, including functionality for prompting the human for input and recording the game details. The game includes methods for playing turns, handling the buy phase, and recording turn-by-turn snapshots of the game state for later analysis.
+    Attributes:
+    - human (Player): The human player participating in the game.
+    - ai (Player): The AI bot player participating in the game.
+    - strategy (BotStrategy): The strategy used by the AI bot during the game.
+    - rng (random.Random): A random number generator instance used for any stochastic decisions made by the AI bot strategy during the game.
+    - turn_records (list): A list that stores detailed records of each turn in the game, including snapshots of the game state before and after orders are resolved
+      and the orders themselves. This is used for later analysis and recording of the game.
+    Methods:
+    - play_turn(): Executes a single turn of the game, including prompting the human for their allocation, having the AI choose its allocation based on its strategy, resolving orders, advancing convoys,
+      applying supply and port labor, and handling the buy phase for both players. It also records snapshots of the game state at key points during the turn for later analysis.
+    - buy_phase(): Handles the buy phase of the turn for both the human and AI players, including prompting the human for purchases and having the AI execute its buy phase based on its strategy.
+    - wants_emergency_supply_warchest(): A method that allows the AI strategy to decide whether it wants to use an emergency supply warchest based on the current game state and its strategy's logic. The human player can also be prompted for this decision if needed.
+    - record_turn(): A helper method to record the details of a turn, including snapshots of the game state before and after orders are resolved, and the orders themselves. This information is stored in the turn_records list for later analysis and recording of the game.
+    """
     def __init__(self, human_name, strategy, rng):
+        """Initializes a PlayVsAIGame instance with a human player and an AI bot using the specified strategy and random seed.
+        Args:    human_name (str): The name of the human player (e.g., "England").
+                strategy (BotStrategy): The BotStrategy instance representing the AI bot's strategy for the game.
+                rng (random.Random): A random number generator instance initialized with a specific seed 
+                for reproducibility of any stochastic decisions made by the AI bot during the game.
+        """
         super().__init__([human_name, f"AI {strategy.name}"])
         self.human = self.players[0]
         self.ai = self.players[1]
@@ -111,6 +169,17 @@ class PlayVsAIGame(Game):
         self.turn_records = []
 
     def play_turn(self):
+        """
+        Executes a single turn of the game, including prompting the human for their allocation, having the AI choose its allocation based on its strategy, resolving orders, advancing convoys, applying supply and port labor, and handling the buy phase for both players. It also records snapshots of the game state at key points during the turn for later analysis.
+        The method follows these steps:
+        1. Clears the screen and displays the current turn and game state.
+        2. Prompts the human player for their allocation for the turn.
+        3. The AI bot chooses its allocation based on its strategy and the current game state.
+        4. Both the human and AI strategies observe the opponent's opening allocation for potential strategic adjustments.
+        5. Resolves the orders for the turn and checks if the game is over after resolution.
+        6. If the game is not over, advances convoys, applies supply, and applies port labor effects.
+        7. Handles the buy phase for both the human and AI players, including prompting the human for purchases and having the AI execute its buy phase based on its strategy.
+        8. Records snapshots of the game state before and after orders are resolved, as"""
         from game_state import UI
 
         UI.clear_screen()
@@ -142,6 +211,15 @@ class PlayVsAIGame(Game):
         self.show_turn_summary(before_snapshot, after_snapshot, orders_snapshot)
 
     def buy_phase(self):
+        """
+        Handles the buy phase of the turn for both the human and AI players, including prompting the human for purchases and having the AI execute its buy phase based on its strategy. The method follows these steps:
+        1. Prompts the human player to make purchases during the buy phase, allowing them to buy gold, ships, and various upgrades based on their current resources and needs.
+        2. Records a baseline snapshot of the human player's state before the AI's buy phase for later comparison.
+        3. The AI bot executes its buy phase based on its strategy, making purchases and upgrades as determined by the strategy's logic and the current game state.
+        4. Records a snapshot of the AI player's state after the buy phase to compare against the baseline and determine what purchases were made.
+        5. Displays a summary of the AI's purchases and changes to its state during the buy phase, highlighting any visible changes in resources, assets, and statuses.
+        6. Prompts the user to review the AI's buy phase changes before continuing to the next turn.
+        """
         self.buy_phase_baselines = {self.human: self.snapshot_player(self.human)}
         self.run_buy_menu(self.human)
         from game_state import UI
@@ -178,6 +256,7 @@ class PlayVsAIGame(Game):
         self.show_state()
 
     def wants_emergency_supply_warchest(
+        # TODO: Likely to be legacy with the enforced autopay system below 0 supply
         self,
         player,
         need,
@@ -202,6 +281,19 @@ class PlayVsAIGame(Game):
         )
 
     def record_turn(self, before_snapshot, orders_snapshot, after_snapshot):
+        """
+        A helper method to record the details of a turn, including snapshots
+        of the game state before and after orders are resolved, and the orders 
+        themselves. This information is stored in the turn_records list for 
+        later analysis and recording of the game.
+        Args: 
+            before_snapshot (dict): A snapshot of the game state before orders are resolved, including player details and allocations.
+            orders_snapshot (dict): A snapshot of the game state after orders are revealed but before resolution, including player details and allocations.
+            after_snapshot (dict): A snapshot of the game state after orders are resolved, including player details and allocations.
+            
+        Returns:    
+            None: This method does not return any value but updates the turn_records attribute of the PlayVsAIGame instance with the details of the turn.
+        """
         self.turn_records.append(
             {
                 "turn": self.turn,
@@ -214,6 +306,15 @@ class PlayVsAIGame(Game):
 
 
 def write_ai_game_record(game, strategy, seed, log_path=AI_GAME_LOG_PATH):
+    """
+    Writes a detailed record of an AI game to a log file in JSON format. The record includes information about the game outcome, player states, and turn-by-turn snapshots for later analysis.
+    Args:    game (PlayVsAIGame): The instance of the PlayVsAIGame that was played, containing all the details of the game state and turn records.
+        strategy (BotStrategy): The BotStrategy instance representing the AI bot's strategy used in the game.
+        seed (int): The random seed used for the game, allowing for reproducibility of the game if needed.
+        log_path (str or Path): The file path where the game record should be saved. The record is appended to the file in JSON Lines format, allowing for multiple game records to be stored in the same file.
+    Returns:    
+        None: This function writes the game record to the specified log file and does not return any value.
+    """
     log_path = Path(log_path)
     record = build_ai_game_record(game, strategy, seed)
     if log_path.parent != Path("."):
@@ -226,6 +327,12 @@ def write_ai_game_record(game, strategy, seed, log_path=AI_GAME_LOG_PATH):
 
 
 def build_ai_game_record(game, strategy, seed):
+    """
+    Constructs a structured record of an AI game,
+    including player details, game outcome, 
+    and turn-by-turn snapshots. This record is used 
+    for logging the game in JSON format for later analysis.
+    """
     human = game.human
     ai = game.ai
     winner = ai_game_winner(game)
@@ -249,6 +356,15 @@ def build_ai_game_record(game, strategy, seed):
 
 
 def ai_game_winner(game):
+    """Determines the winner of an AI game based on the game state, 
+    including checking for port destruction and comparing asset scores. 
+    
+    Args:    
+        game (PlayVsAIGame): The instance of the PlayVsAIGame that was played, containing all the details of the game state.
+    Returns:
+        str: A string indicating the winner of the game, 
+            which can be "human" if the human player won, "ai" if the AI bot won, or "draw" if the game ended in a tie based on asset scores.
+    """
     human = game.human
     ai = game.ai
 
@@ -264,6 +380,13 @@ def ai_game_winner(game):
 
 
 def ai_game_win_type(game):
+    """
+    Determines the type of win (port kill, asset victory, or draw) in an AI game based on the game state.
+    Args:    
+        game (PlayVsAIGame): The instance of the PlayVsAIGame that was played, containing all the details of the game state.
+    Returns:    
+        str: A string indicating the type of win, which can be "port" if the win was achieved by destroying the opponent's port, "assets" if the win was achieved by having a higher asset score at the end of the game, or "draw" if the game ended in a tie based on asset scores.
+    """
     if game.port_destroyer is not None:
         return "port"
     if game.human.asset_score == game.ai.asset_score:
@@ -313,6 +436,14 @@ def player_record(player):
 
 
 def snapshot_record(snapshot):
+    """
+    Creates a structured record of the game state at a specific snapshot, including player details and allocations. This is used for recording turn-by-turn snapshots in the AI game records for later analysis.
+    Args:    
+    snapshot (dict): A dictionary representing the game state at a specific point in time, typically including player details and their allocations for the turn. The structure of the snapshot is expected to be a
+    dictionary where the keys are player names and the values are dictionaries containing player details and allocations.
+    Returns:
+        dict: A structured record of the game state at the snapshot, where each player's details and allocations are converted into a serializable format using the value_record helper function. The resulting dictionary is structured in a way that allows for easy analysis and comparison of game states across different turns in the AI game records.
+    """
     return {
         player_name: {
             key: value_record(value)
@@ -323,6 +454,13 @@ def snapshot_record(snapshot):
 
 
 def value_record(value):
+    """Helper function to convert complex values (like Allocations) into a serializable format for recording in the AI game records. If the value is an instance of Allocation, it converts it into a dictionary format that captures the relevant details of the allocation. For other types of values, it returns them as-is, assuming they are already serializable.
+    Args:
+        value: The value to be converted for recording. This can be of any type, but if it is an instance of Allocation, it will be converted into a dictionary format.
+    Returns:    
+        dict or any: If the input value is an instance of Allocation, it returns a dictionary containing
+        the details of the allocation (trade, raid, guard, fire, total). For any other type of value, it returns the value as-is.
+    """
     if isinstance(value, Allocation):
         return {
             "trade": value.trade,
@@ -341,6 +479,16 @@ def play_vs_ai(
     seed=None,
     log_path=AI_GAME_LOG_PATH,
 ):
+    """
+    Runs a game against the AI using a specified strategy and records the results. This function initializes a PlayVsAIGame with the given human player name, AI strategy, and random seed for reproducibility. It then plays the game, prints the outcome, and writes a detailed record of the game to a log file for later analysis.
+    Args:
+        human_name (str): The name of the human player (default is "England").
+        strategy_name (str): The name of the AI strategy to use.
+        seed (int, optional): The random seed for reproducibility.
+        log_path (str): The path to the log file for recording game results.
+    Returns:
+        None: This function runs the game and records the results but does not return any value.
+    """
     rng = random.Random(seed)
     strategy = find_strategy(strategy_name)
     game = PlayVsAIGame(human_name=human_name, strategy=strategy, rng=rng)
@@ -350,6 +498,11 @@ def play_vs_ai(
 
 
 def summarize_ai_games(log_path=AI_GAME_LOG_PATH):
+    """ 
+    Reads recorded AI game logs and summarizes the outcomes by strategy. This function reads the AI game records from the specified log file, aggregates the results by AI strategy, and prints a summary of the outcomes, including the number of games played, wins for the human and AI, draws, average turns, and average scores for both players.
+    Args:    log_path (str): The path to the log file containing the AI game records in JSON Lines format.
+    Returns:    None: This function reads the game records, aggregates the results, and prints a summary to the console, but does not return any value.
+    """
     log_path = Path(log_path)
     if not log_path.exists():
         print(f"No AI game log found at {log_path}.")
@@ -389,6 +542,13 @@ def summarize_ai_games(log_path=AI_GAME_LOG_PATH):
 
 
 def print_ai_game_summary(log_path, stats):
+    """ 
+    Prints a summary of AI game outcomes by strategy, including the number of games played, wins for the human and AI, draws, average turns, and average scores for both players. This function takes the aggregated statistics from the AI game records and formats them into a readable table for analysis.
+    Args:
+    log_path (str): The path to the log file containing the AI game records.
+    stats (defaultdict): A dictionary containing the aggregated statistics for each AI strategy, including the number of games played, wins for the human and AI, draws, total turns, and total scores for both players.
+    Returns:
+    None: This function prints the summary to the console but does not return any value."""
     print(f"\n=== HUMAN VS AI HISTORY: {log_path} ===")
     print(
         "\nAI strategy   Games  Human wins  AI wins  Draws  "
@@ -414,6 +574,12 @@ def print_ai_game_summary(log_path, stats):
 
 
 def run_self_play(games=100, seed=None):
+    """
+    Simulates self-play scenarios between two bot strategies for benchmarking and training purposes. This function runs a specified number of games between randomly chosen bot strategies, aggregates the results, and prints a summary of the outcomes, including win rates, average turns, average scores, and average ships for each strategy.
+    Args:    games (int): The number of self-play games to simulate (default is 100).
+        seed (int, optional): The random seed for reproducibility of the self-play simulations.
+    Returns:    None: This function runs the self-play simulations, aggregates the results, and prints a summary to the console, but does not return any value.
+    """
     rng = random.Random(seed)
     strategies = default_bot_strategies()
     stats = defaultdict(
@@ -451,6 +617,13 @@ def run_self_play(games=100, seed=None):
 
 
 def print_self_play_report(games, seed, stats):
+    """
+    Prints a summary report of self-play scenarios between bot strategies, including win rates, average turns, average scores, and average ships for each strategy. This function takes the aggregated statistics from the self-play simulations and formats them into a readable table for analysis, along with human-facing lessons based on the results.
+    Args:    games (int): The number of self-play games that were simulated.
+        seed (int, optional): The random seed that was used for the self-play simulations, if any.
+        stats (defaultdict): A dictionary containing the aggregated statistics for each bot strategy, including the number of games played, wins, draws, port wins, total turns, total scores, and total ships for each strategy.
+    Returns:    None: This function prints the summary report to the console but does not return any value.
+    """
     print(f"\n=== SELF-PLAY REPORT: {games} GAME(S) ===")
     if seed is not None:
         print(f"Seed: {seed}")

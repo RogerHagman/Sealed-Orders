@@ -1,3 +1,12 @@
+# bot_benchmark.py
+"""
+Module for benchmarking bot strategies against the default bot roster.
+Provides functions to evaluate a strategy file against the default bot roster,
+collecting detailed statistics on wins, losses, turns, scores, and other metrics.
+Results can be printed in a formatted table and optionally saved to a JSON or CSV file formats.
+"""
+
+# Imports
 import json
 import multiprocessing
 import random
@@ -11,6 +20,12 @@ from bot_strategy import load_strategy
 
 
 def process_pool_context():
+    """
+    Get a multiprocessing context that supports forking, or return None if not available.
+    This is used to ensure that the ProcessPoolExecutor can fork processes on platforms that support it,
+    which can be more efficient for CPU-bound tasks. On platforms that do not support forking (like Windows), 
+    it will fall back to the default context.
+    """
     try:
         return multiprocessing.get_context("fork")
     except ValueError:
@@ -24,6 +39,16 @@ def evaluate_strategy_file(
     output_path=None,
     workers=1,
 ):
+    """
+    Evaluate a strategy file against the default bot roster and collect benchmark statistics.
+    
+    Args:
+        strategy_path (str): Path to the strategy JSON file to evaluate.
+        games_per_opponent (int): Number of games to play against each opponent strategy.
+        seed (int, optional): Random seed for reproducibility. If None, a random seed will be used.
+        output_path (str, optional): Path to save the benchmark results as JSON or CSV. If None, results will not be saved.
+        workers (int, optional): Number of worker processes to use for parallel evaluation. Defaults to 1 (no parallelism).
+    """
     rng = random.Random(seed)
     workers = max(1, int(workers or 1))
     strategy = load_strategy(strategy_path)
@@ -46,6 +71,17 @@ def evaluate_strategy_file(
 
 
 def evaluate_head_to_head(strategy, opponent, games, rng):
+    """Evaluate a head-to-head matchup between two strategies over a specified number of games, 
+    collecting detailed statistics.
+    Args:
+        strategy: The strategy being evaluated.
+        opponent: The opponent strategy to benchmark against.
+        games: The number of games to play in the head-to-head matchup.
+        rng: A random.Random instance for reproducibility.
+    Returns (dict):
+        A dictionary containing detailed statistics about the head-to-head matchup, including wins, 
+        losses, draws, turns, scores, and various in-game metrics.
+    """
     stats = {
         "opponent": opponent.name,
         "games": 0,
@@ -125,6 +161,7 @@ def evaluate_head_to_head(strategy, opponent, games, rng):
 
 
 def print_strategy_benchmark(rows):
+    """Print a formatted benchmark table for a strategy's performance against multiple opponents"""
     print(
         "\nOpponent         Games  Wins  Losses  Draws  Win rate  "
         "Port wins  Port losses  Avg turns  Win turns  Loss turns  Avg assets  Opp avg  Supply  Crisis"
@@ -170,6 +207,38 @@ def print_strategy_benchmark(rows):
 
 
 def print_strategy_benchmark_row(row):
+    """Print a single row of the strategy benchmark table with calculated metrics
+    based on the raw statistics collected for that opponent.
+    
+    Args:
+        row (dict): A dictionary containing raw statistics for a single opponent matchup, including:
+            - opponent: The name of the opponent strategy.
+            - games: Total number of games played against this opponent.
+            - wins: Number of wins against this opponent.
+            - losses: Number of losses against this opponent.
+            - draws: Number of draws against this opponent.
+            - port_wins: Number of wins achieved by capturing the port.
+            - port_losses: Number of losses suffered by the opponent capturing the port.
+            - turns_total: Total number of turns taken across all games against this opponent.
+            - win_turns_total: Total number of turns taken in games that were won.
+            - loss_turns_total: Total number of turns taken in games that were lost.
+            - score_total: Total score accumulated across all games against this opponent.
+            - opponent_score_total: Total score accumulated by the opponent across all games.
+            - admiralty_completed: Number of games where the Admiralty was completed.
+            - admirals_total: Total number of admirals recruited across all games.
+            - dockhouse_completed: Number of games where the Dockhouse was completed.
+            - dockhouse_burned: Number of games where the Dockhouse was burned.
+            - dockhands_total: Total number of dockhands recruited across all games.
+            - dockhand_idle_turns: Total number of turns where dockhands were idle across all games.
+            - dockhand_discounted_repairs: Total number of discounted repairs performed by dockhands across all games.
+            - dockhand_boatwright_boats: Total number of boats built by dockhands acting as boatwrights across all games.
+            - supply_total: Total supply accumulated across all games.
+            - supply_crises: Total number of supply crises experienced across all games.
+            - supply_desertions_total: Total number of desertions due to supply issues across all games.
+            - supply_unrest_burns: Total number of times supply unrest caused burns across all games.
+    Returns:
+        None: This function prints the formatted row directly to the console and does not return any value
+    """
     games = row["games"]
     win_rate = row["wins"] / games if games else 0
     avg_turns = row["turns_total"] / games if games else 0
@@ -192,6 +261,15 @@ def print_strategy_benchmark_row(row):
 
 
 def write_strategy_benchmark(rows, output_path):
+    """
+    Write the strategy benchmark results to a JSON or CSV file, creating parent directories if needed.
+    Args:        rows (list): A list of dictionaries containing benchmark statistics for each opponent matchup.
+        output_path (str):  The file path where the benchmark results should be saved. \
+                            The file format (JSON or CSV) is determined by the file extension. \
+                            If the parent directories do not exist, they will be created automatically.
+    Returns: 
+        None: This function writes the benchmark results to the specified file and does not return any value.
+    """
     output_path = Path(output_path)
     if output_path.parent != Path("."):
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +285,38 @@ def write_strategy_benchmark(rows, output_path):
 
 
 def write_strategy_benchmark_csv(rows, output_path):
+    # TODO: consider refactoring this function to take a config object instead of a long parameter list
+    """
+    Write the strategy benchmark results to a CSV file with calculated metrics based on the raw statistics collected for each opponent matchup.
+    Args:        rows (list): A list of dictionaries containing raw statistics for each opponent matchup, including:
+            - opponent: The name of the opponent strategy.
+            - games: Total number of games played against this opponent.
+            - wins: Number of wins against this opponent.
+            - losses: Number of losses against this opponent.
+            - draws: Number of draws against this opponent.
+            - port_wins: Number of wins achieved by capturing the port.
+            - port_losses: Number of losses suffered by the opponent capturing the port.
+            - turns_total: Total number of turns taken across all games against this opponent.
+            - win_turns_total: Total number of turns taken in games that were won.
+            - loss_turns_total: Total number of turns taken in games that were lost.
+            - score_total: Total score accumulated across all games against this opponent.
+            - opponent_score_total: Total score accumulated by the opponent across all games.
+            - admiralty_completed: Number of games where the Admiralty was completed.
+            - admirals_total: Total number of admirals recruited across all games.
+            - dockhouse_completed: Number of games where the Dockhouse was completed.
+            - dockhouse_burned: Number of games where the Dockhouse was burned.
+            - dockhands_total: Total number of dockhands recruited across all games.
+            - dockhand_idle_turns: Total number of turns where dockhands were idle across all games.
+            - dockhand_discounted_repairs: Total number of discounted repairs performed by dockhands across all games.
+            - dockhand_boatwright_boats: Total number of boats built by dockhands acting as boatwrights across all games.
+            - supply_total: Total supply accumulated across all games.
+            - supply_crises: Total number of supply crises experienced across all games.
+            - supply_desertions_total: Total number of desertions due to supply issues across all games.
+            - supply_unrest_burns: Total number of times supply unrest caused burns across all games.
+        output_path (str): The file path where the CSV benchmark results should be saved. If the parent directories do not exist, they will be created automatically.
+    Returns:
+        None: This function writes the benchmark results to the specified CSV file and does not return any value.
+    """
     headers = [
         "opponent",
         "games",
@@ -271,6 +381,17 @@ def write_strategy_benchmark_csv(rows, output_path):
 
 
 def benchmark_strategy(strategy, opponents, games_per_opponent, rng, workers=1):
+    """
+    Benchmark a strategy against a list of opponent strategies, optionally using parallel processing.
+    Args:        strategy: The strategy to benchmark.
+        opponents: A list of opponent strategies to benchmark against.
+        games_per_opponent: The number of games to play against each opponent strategy.
+        rng: A random.Random instance for reproducibility.
+        workers: The number of worker processes to use for parallel evaluation. Defaults to 1 (no parallelism).
+    Returns:
+        A list of dictionaries containing benchmark statistics for each opponent matchup.
+    """
+
     workers = max(1, int(workers or 1))
     if workers <= 1 or len(opponents) <= 1:
         return [
@@ -291,6 +412,11 @@ def benchmark_strategy(strategy, opponents, games_per_opponent, rng, workers=1):
 
 
 def evaluate_head_to_head_worker(args):
+    """Worker function to evaluate a head-to-head matchup in a separate process.
+    Args:    args (tuple): A tuple containing the strategy, opponent, number of games, and random seed for the matchup.
+    Returns:    dict: A dictionary containing detailed statistics about the head-to-head matchup, 
+                as returned by the evaluate_head_to_head function.
+    """
     strategy, opponent, games_per_opponent, seed = args
     return evaluate_head_to_head(
         strategy,
