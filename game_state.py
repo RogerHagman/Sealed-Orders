@@ -1,3 +1,6 @@
+# game_state.py
+
+### Imports ###
 import math
 import os
 import re

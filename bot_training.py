@@ -1,3 +1,7 @@
+# bot_training.py
+
+
+# Imports
 import json
 import multiprocessing
 import random

@@ -1,7 +1,7 @@
 # main.py
 """Sealed Orders: a 2-player strategy game of naval warfare and intrigue."""
 
-# Imports
+### Imports ###
 import argparse
 import sys
 from game_engine import Game

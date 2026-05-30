@@ -1,12 +1,13 @@
 # bot_strategy.py
 
+
 # Imports
 import json
 from pathlib import Path
 
 from game_state import Allocation, Rules
 
-
+# Constants
 BOT_WEIGHT_FIELDS = [
     "trade_weight",
     "raid_weight",
@@ -33,6 +34,7 @@ BOT_WEIGHT_FIELDS = [
     "repair_bias",
     "construction_idle_bias",
 ]
+# The build priority list defines the order in which the bot will consider purchasing projects during the buy phase.
 BUILD_PROJECTS = [
     "shipyard",
     "fort",
@@ -49,8 +51,10 @@ BUILD_PROJECTS = [
     "admiral",
     "overtime",
 ]
-MIN_FLEET_FOR_PROJECTS = 3
-MIN_FLEET_FOR_CONVOYS = 2
+
+# Strategy parameters and constants
+MIN_FLEET_FOR_PROJECTS = 3 
+MIN_FLEET_FOR_CONVOYS = 2 
 REBUILD_FLEET_TARGET = 4
 MIDGAME_START_TURN = 4
 PRIORITY_PROJECT_MIN_BIAS = 0.65
@@ -84,6 +88,68 @@ SUPPLY_SURPLUS_BONUS = 4
 
 
 class BotStrategy:
+    """
+    A class representing a bot's strategy in the game, including parameters such as trade_weight, raid_weight, guard_weight, fire_weight, build_priority, and various biases that influence the bot's decision-making during the game. Some strategies also include an opening_book that defines specific actions for the early turns of the game.
+    
+    Attributes:
+    
+    name (str): The name of the bot strategy.
+        trade_weight (float): The weight for allocating ships to trade.
+        raid_weight (float): The weight for allocating ships to raid.
+        guard_weight (float): The weight for allocating ships to guard.
+        fire_weight (float): The weight for allocating ships to fire.
+        build_priority (list): The priority list for building projects.
+        convoy_bias (float): The bias for using convoys in the strategy.
+        ship_bias (float): The bias for purchasing ships in the strategy.
+        shipyard_bias (float): The bias for purchasing the shipyard project.
+        fort_bias (float): The bias for purchasing the fort project.
+        trade_guild_bias (float): The bias for purchasing the trade guild project.
+        administrator_bias (float): The bias for purchasing the administrator project.
+        guard_captain_bias (float): The bias for purchasing the guard captain project.
+        fire_plans_bias (float): The bias for purchasing the fire ship plans project.
+        fishing_dock_bias (float): The bias for purchasing the fishing dock project.
+        fishing_boat_bias (float): The bias for purchasing the fishing boat project.
+        dockhouse_bias (float): The bias for purchasing the dockhouse project.
+        dockhand_bias (float): The bias for purchasing the dockhand project.
+        dockhand_repair_bias (float): The bias for using dockhands for repairs.
+        dockhand_boatwright_bias (float): The bias for using dockhands for boatwright duties.
+        dry_dock_bias (float): The bias for purchasing the dry dock project.
+        admiralty_bias (float): The bias for purchasing the admiralty project.
+        admiral_bias (float): The bias for purchasing the admiral project.
+        overtime_bias (float): The bias for using admiralty overtime.
+        repair_bias (float): The bias for repairing damaged ships.
+        construction_idle_bias (float): The bias for leaving ships idle for construction.
+        opening_book (list): A list of opening strategies that define specific actions for the early turns of the game.
+        adaptive (bool): Whether the strategy should adapt based on observations during the game.
+        adaptation_strength (float): The strength of the adaptation when the strategy is adaptive.
+        adaptation_turns (int): The number of turns to consider for adaptation when the strategy is adaptive.
+        observations (dict): A dictionary to store observations about the opponent's behavior during the game, which can be used for adaptive strategies.
+
+        Methods:
+        __init__: Initializes the BotStrategy with the specified parameters and biases.
+        default_project_bias: A helper method to determine the default bias for a project based on whether it is included in the build priority.
+        project_buy_bias: A method to get the bias for purchasing a specific project, taking into account whether it is in the build priority.
+        choose_allocation: A method to choose how to allocate ships for the current turn based on the strategy's weights and the current game state.
+        run_buy_phase: A method to execute the buy phase for the bot, making decisions on which projects to purchase and whether to launch treasure or payroll based on the strategy's parameters and the current game state.
+        opening_turn: A method to determine if there is a specific opening strategy to follow for the current turn based on the opening book.
+        choose_opening: A method to choose an opening strategy from the opening book, potentially considering the opponent's behavior.
+        weighted_opening_choice: A helper method to choose an opening strategy from a list of openings based on their weights.
+        is_ultra_aggro_opponent: A method to determine if the opponent is playing an ultra-aggressive strategy based on their early game behavior.
+        is_legal_opening_allocation: A method to check if a proposed allocation of ships for an opening strategy is legal given the current game state.
+        run_opening_buy_phase: A method to execute the buy phase actions defined in an opening strategy if applicable.
+        run_opening_buy_action: A method to execute a specific buy action defined in an opening strategy.
+            choose_dockhand_duty: A method to decide how to assign dockhands for the current turn.
+            repair_damaged_raiders: A method to decide whether to use dockhands to repair damaged raiders.
+            rebuild_fleet: A method to decide whether to use dockhands to rebuild the fleet if it has been heavily damaged.
+            evaluate_position: A method to evaluate the current position in the game based on various factors such as fleet size, supply, and opponent's behavior.
+            adjust_weights_for_position: A method to adjust the strategy's weights for allocating ships based on the evaluated position in the game.
+            adjust_weights_for_observations: A method to adjust the strategy's weights based on observations of the opponent's behavior during the game.
+        weighted_choice: A helper method to make a weighted random choice among the allocation options based on the strategy's weights.
+            convoy_escort_guards: A method to determine how many guards to allocate for convoy escort based on the current game state and strategy parameters.
+            should_consider_fire: A method to determine whether the bot should consider allocating ships to fire based on the current game state and strategy parameters.
+            should_launch_payroll: A method to determine whether the bot should launch payroll based on the current game state and strategy parameters.
+            should_launch_treasure: A method to determine whether the bot should launch treasure based on the current game state and strategy parameters.
+        """
     def __init__(
         self,
         name,
@@ -262,6 +328,22 @@ class BotStrategy:
         )
 
     def run_buy_phase(self, game, player, opponent, rng):
+        """
+        Executes the buy phase for the bot, making decisions on which projects to purchase and whether to 
+        launch treasure or payroll based on the strategy's parameters and the current game state. 
+        This method considers the bot's opening book for early turns, repairs damaged raiders, 
+        rebuilds the fleet if heavily damaged, evaluates the current position in the game, 
+        and makes purchasing decisions for projects and ships based on the evaluated position and strategy biases. 
+        It also decides whether to launch payroll or treasure based on the current game state and strategy parameters.
+        
+        Args:
+            game: The current game state object, which provides information about the players, their resources, and the game status.
+            player: The bot's player object, which contains information about the bot's current resources, fleet, and projects.
+            opponent: The opponent player object, which contains information about the opponent's current resources, fleet, and projects.
+            rng: A random number generator object used for making randomized decisions based on the strategy's biases.
+            Returns:
+                None: This method performs actions that affect the game state but does not return any value.
+        """
         game.auto_launch_final_payroll(player)
         self.choose_dockhand_duty(game, player, opponent, rng)
         player.refresh_dockhand_repair_discount()
@@ -422,6 +504,18 @@ class BotStrategy:
                 player.buy_ships(affordable - 1)
 
     def opening_turn(self, game, player, rng):
+        """Determines if there is a specific opening strategy to follow for the current turn based on the opening book.
+        The bot will follow the opening book for the first few turns of the game (up to turn 3) 
+        to execute specific strategies that are designed for the early game. After turn 3
+        or if there is no opening book defined, the bot will return None, 
+        indicating that it should use its regular strategy for ship allocation and purchasing decisions.
+        Args:
+        game: The current game state object, which provides information about the players, their resources, and the game status.
+        player: The bot's player object, which contains information about the bot's current resources, fleet, and projects.
+        rng: A random number generator object used for making randomized decisions based on the strategy's biases.
+        Returns:
+        dict or None: A dictionary containing the specific actions to take for the current turn if there is an applicable opening strategy defined in the opening book, or None if there is no specific opening strategy to follow for the current turn.
+        """
         if not self.opening_book or game.turn > 3:
             return None
 
@@ -1141,6 +1235,15 @@ def random_evolving_strategy(rng, name="Evolving"):
 
 
 def mutate_strategy(strategy, rng, mutation_scale):
+    """Apply random mutations to a given strategy's weights and build priority.
+    
+    Args:
+    strategy (BotStrategy): The original strategy to mutate.
+    rng (random.Random): A random number generator instance to use for mutations.
+    mutation_scale (float): The maximum amount by which to mutate each weight (e.g., 0.5 for up to ±0.5 mutation).
+    Returns:
+    BotStrategy: A new strategy instance with mutated weights and possibly a mutated build priority.
+    """
     mutated = copy_strategy(strategy)
     for field in BOT_WEIGHT_FIELDS:
         value = getattr(mutated, field)
@@ -1158,6 +1261,22 @@ def mutate_strategy(strategy, rng, mutation_scale):
 
 
 def mutate_build_priority(build_priority, rng):
+    """
+    Randomly add, remove, or swap a project in the build priority list.
+    
+    Args        build_priority (list): The current build priority list.
+        rng (random.Random): A random number generator instance.
+    Returns:
+        list: A new build priority list with a mutation applied.
+
+    Example:
+        current_priority = ["shipyard", "fort", "trade_guild"]
+        new_priority = mutate_build_priority(current_priority, rng)
+        # new_priority might be:
+        # - ["shipyard", "fort", "trade_guild", "admiralty"] (added "admiralty")
+        # - ["fort", "trade_guild"] (removed "shipyard")
+        # - ["trade_guild", "fort", "shipyard"] (swapped "shipyard" and "trade_guild")
+    """
     projects = build_priority[:]
     action = rng.choice(["add", "remove", "swap"])
 
@@ -1176,6 +1295,21 @@ def mutate_build_priority(build_priority, rng):
 
 
 def blend_strategy(current, candidate, learning_rate):
+    """
+    Blend the weights and build priority of a candidate strategy into the current strategy based on a learning rate.
+    
+    Args:
+    current (BotStrategy): The current strategy to be updated.
+    candidate (BotStrategy): The candidate strategy whose traits will be blended into the current strategy.
+    learning_rate (float): A value between 0 and 1 that determines how much of the candidate's traits to incorporate (e.g., 0.1 for 10% influence).
+    Returns:
+    BotStrategy: A new strategy instance that is a blend of the current and candidate strategies.
+    Example:
+        current_strategy = BotStrategy(trade_weight=2.0, raid_weight=3.0, ...)
+        candidate_strategy = BotStrategy(trade_weight=4.0, raid_weight=1.0, ...)
+        blended_strategy = blend_strategy(current_strategy, candidate_strategy, learning_rate=0.1)
+        # blended_strategy will have trade_weight closer to 2.2 and raid_weight closer to 2.8 than the current strategy.
+    """
     learned = copy_strategy(current)
     for field in BOT_WEIGHT_FIELDS:
         current_value = getattr(current, field)
@@ -1192,6 +1326,19 @@ def blend_strategy(current, candidate, learning_rate):
 
 
 def copy_strategy(strategy):
+    """
+    Create a deep copy of a BotStrategy instance.
+    
+    Args:
+    strategy (BotStrategy): The strategy to copy.
+    Returns:
+    BotStrategy: A new instance of BotStrategy with the same values as the original.
+
+        Example:
+        original_strategy = BotStrategy(trade_weight=2.0, raid_weight=3.0, ...)
+        copied_strategy = copy_strategy(original_strategy)
+        # copied_strategy will have the same trade_weight and raid_weight as original_strategy, but will be a different instance in memory.
+    """
     return BotStrategy(
         name=strategy.name,
         trade_weight=strategy.trade_weight,
@@ -1227,10 +1374,31 @@ def copy_strategy(strategy):
 
 
 def clamp(value, minimum, maximum):
+    """
+    Clamp a value between a minimum and maximum range.
+    
+    Args:
+    value (float): The value to clamp.
+    minimum (float): The minimum allowed value.
+    maximum (float): The maximum allowed value.
+    Returns:
+    float: The clamped value, guaranteed to be between minimum and maximum.
+    Example:
+        clamped_value = clamp(1.5, 0.0, 1.0)  # clamped_value will be 1.0
+        clamped_value = clamp(-0.5, 0.0, 1.0) # clamped_value will be 0.0
+        clamped_value = clamp(0.5, 0.0, 1.0)  # clamped_value will be 0.5
+    """
     return max(minimum, min(maximum, value))
 
 
 def strategy_record(strategy):
+    """
+    Convert a BotStrategy instance into a dictionary record suitable for JSON serialization.
+    Args:
+        strategy (BotStrategy): The strategy to convert into a record.
+    Returns:    
+        dict: A dictionary containing the strategy's attributes, ready for JSON serialization.
+    """
     record = {
         "name": strategy.name,
         "trade_weight": strategy.trade_weight,
@@ -1268,6 +1436,13 @@ def strategy_record(strategy):
 
 
 def opening_book_record(opening_book):
+    """
+    Convert an opening book into a list of dictionary records suitable for JSON serialization.
+    Args:
+        opening_book (list): A list of opening records, where each record is a dictionary containing the opening's attributes and turn data.
+    Returns:
+        list: A list of dictionary records suitable for JSON serialization.
+    """
     return [
         {
             "name": opening.get("name", "opening"),
@@ -1285,6 +1460,13 @@ def opening_book_record(opening_book):
 
 
 def opening_turn_record(turn_data):
+    """
+    Convert turn data from an opening book into a dictionary record suitable for JSON serialization.
+    Args:        turn_data (dict): A dictionary containing the turn's attributes, including "buy_actions", 
+    "allocation", and "continue_buy_phase".
+    Returns:
+        dict: A dictionary record suitable for JSON serialization, containing the turn's attributes.
+    """
     record = {
         "buy_actions": turn_data.get("buy_actions", [])[:],
     }
@@ -1297,6 +1479,13 @@ def opening_turn_record(turn_data):
 
 
 def allocation_record(allocation):
+    """
+    Convert an Allocation instance into a dictionary record suitable for JSON serialization.
+    Args:
+        allocation (Allocation): An instance of the Allocation class containing trade, raid, guard, and fire values.
+    Returns:
+        dict: A dictionary record containing the allocation's attributes, ready for JSON serialization.
+    """
     return {
         "trade": allocation.trade,
         "raid": allocation.raid,

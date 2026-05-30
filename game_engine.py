@@ -1,3 +1,6 @@
+# game_engine.py
+
+### Imports ###
 import io
 import math
 import random
